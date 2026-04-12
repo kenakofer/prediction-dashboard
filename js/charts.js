@@ -97,7 +97,8 @@ const ChartRenderer = (() => {
 
   // ── Chart type: probability ────────────────────
 
-  function renderProbability(canvas, graph, sources, graphData, annotations) {
+  function renderProbability(canvas, graph, sources, graphData, annotations, days) {
+    const cutoff = days ? cutoffDate(days) : null;
     const platformCount = {};
     const datasets = (sources || [])
       .filter(s => graphData[s.slug])
@@ -105,7 +106,9 @@ const ChartRenderer = (() => {
         const pIdx = platformCount[s.platform] || 0;
         platformCount[s.platform] = pIdx + 1;
         const color = pickColor(s, i);
-        const data = graphData[s.slug].map(p => ({ x: p.date, y: p.value }));
+        const raw = graphData[s.slug];
+        const data = (cutoff ? raw.filter(p => p.date >= cutoff) : raw)
+          .map(p => ({ x: p.date, y: p.value }));
         return {
           label: s.label,
           data,
@@ -153,6 +156,12 @@ const ChartRenderer = (() => {
 
   const DEFAULT_WINDOWS = [12, 24, 60]; // months
 
+  function cutoffDate(days) {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d;
+  }
+
   function monthLabel(m) {
     if (m % 12 === 0) return `${m / 12}Y`;
     return `${m}M`;
@@ -192,12 +201,10 @@ const ChartRenderer = (() => {
       });
   }
 
-  function renderPercentChange(canvas, graph, sources, graphData) {
-    const windows = parseWindows(graph.param);
-    const defaultDays = Math.round(windows[0] * 30.44);
+  function renderPercentChange(canvas, graph, sources, graphData, days) {
     return new Chart(canvas, {
       type: 'line',
-      data: { datasets: buildPctDatasets(sources, graphData, defaultDays) },
+      data: { datasets: buildPctDatasets(sources, graphData, days || Math.round(parseWindows(graph.param)[0] * 30.44)) },
       options: {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
@@ -223,12 +230,15 @@ const ChartRenderer = (() => {
 
   // ── Chart type: dollar ─────────────────────────
 
-  function renderDollar(canvas, graph, sources, graphData) {
+  function renderDollar(canvas, graph, sources, graphData, days) {
+    const cutoff = days ? cutoffDate(days) : null;
     const datasets = (sources || [])
       .filter(s => graphData[s.slug]?.length > 0)
       .map((s, i) => {
         const color = pickColor(s, i);
-        const data = graphData[s.slug].map(p => ({ x: p.date, y: p.value }));
+        const raw = graphData[s.slug];
+        const data = (cutoff ? raw.filter(p => p.date >= cutoff) : raw)
+          .map(p => ({ x: p.date, y: p.value }));
         return {
           label: s.label, data,
           borderColor: color, backgroundColor: color + '1a',
@@ -266,12 +276,15 @@ const ChartRenderer = (() => {
 
   // ── Chart type: index ──────────────────────────
 
-  function renderIndex(canvas, graph, sources, graphData) {
+  function renderIndex(canvas, graph, sources, graphData, days) {
+    const cutoff = days ? cutoffDate(days) : null;
     const datasets = (sources || [])
       .filter(s => graphData[s.slug]?.length > 0)
       .map((s, i) => {
         const color = pickColor(s, i);
-        const data = graphData[s.slug].map(p => ({ x: p.date, y: p.value }));
+        const raw = graphData[s.slug];
+        const data = (cutoff ? raw.filter(p => p.date >= cutoff) : raw)
+          .map(p => ({ x: p.date, y: p.value }));
         return {
           label: s.label, data,
           borderColor: color, backgroundColor: color + '1a',
@@ -308,12 +321,14 @@ const ChartRenderer = (() => {
 
   // ── Chart type: log_scatter ────────────────────
 
-  function renderLogScatter(canvas, graph, sources, graphData) {
+  function renderLogScatter(canvas, graph, sources, graphData, days) {
+    const cutoff = days ? cutoffDate(days) : null;
     // Collect all data points across all series for this graph
     const allPoints = [];
     for (const [series, points] of Object.entries(graphData)) {
       const name = series.includes(':') ? series.split(':').slice(1).join(':') : series;
-      for (const p of points) {
+      const filtered = cutoff ? points.filter(p => p.date >= cutoff) : points;
+      for (const p of filtered) {
         allPoints.push({ date: p.date, value: p.value, name });
       }
     }
@@ -424,10 +439,10 @@ const ChartRenderer = (() => {
       card.appendChild(probDiv);
     }
 
-    // Time window toggle for percent_change charts
+    // Time window toggle — shown for any chart type with param set
     let toggleDiv = null;
     let windowMonths = null;
-    if (graph.chartType === 'percent_change') {
+    if (graph.param) {
       windowMonths = parseWindows(graph.param);
       toggleDiv = document.createElement('div');
       toggleDiv.className = 'window-toggle';
@@ -450,27 +465,29 @@ const ChartRenderer = (() => {
 
     container.appendChild(card);
 
-    // Render the chart
-    let chart;
-    switch (graph.chartType) {
-      case 'probability':
-        chart = renderProbability(canvas, graph, sources, graphData || {}, annotations);
-        break;
-      case 'percent_change':
-        chart = renderPercentChange(canvas, graph, sources, graphData || {});
-        break;
-      case 'dollar':
-        chart = renderDollar(canvas, graph, sources, graphData || {});
-        break;
-      case 'index':
-        chart = renderIndex(canvas, graph, sources, graphData || {});
-        break;
-      case 'log_scatter':
-        chart = renderLogScatter(canvas, graph, sources, graphData || {});
-        break;
-      default:
-        console.warn(`Unknown chart_type "${graph.chartType}" for ${graph.id}`);
+    // Initial days from first window
+    let currentDays = windowMonths ? Math.round(windowMonths[0] * 30.44) : null;
+
+    function buildChart(days) {
+      if (chart) chart.destroy();
+      switch (graph.chartType) {
+        case 'probability':
+          return renderProbability(canvas, graph, sources, graphData || {}, annotations, days);
+        case 'percent_change':
+          return renderPercentChange(canvas, graph, sources, graphData || {}, days);
+        case 'dollar':
+          return renderDollar(canvas, graph, sources, graphData || {}, days);
+        case 'index':
+          return renderIndex(canvas, graph, sources, graphData || {}, days);
+        case 'log_scatter':
+          return renderLogScatter(canvas, graph, sources, graphData || {}, days);
+        default:
+          console.warn(`Unknown chart_type "${graph.chartType}" for ${graph.id}`);
+          return null;
+      }
     }
+
+    let chart = buildChart(currentDays);
 
     // Wire up time window toggle
     if (toggleDiv && chart) {
@@ -478,9 +495,8 @@ const ChartRenderer = (() => {
         const btn = e.target.closest('.window-btn');
         if (!btn) return;
         toggleDiv.querySelectorAll('.window-btn').forEach(b => b.classList.toggle('active', b === btn));
-        const days = Math.round(parseInt(btn.dataset.months, 10) * 30.44);
-        chart.data.datasets = buildPctDatasets(sources, graphData || {}, days);
-        chart.update();
+        currentDays = Math.round(parseInt(btn.dataset.months, 10) * 30.44);
+        chart = buildChart(currentDays);
       });
     }
   }
