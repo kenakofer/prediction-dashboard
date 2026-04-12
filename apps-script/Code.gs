@@ -624,6 +624,12 @@ function ensurePricesSheet() {
   return sheet;
 }
 
+/** Safely convert a sheet cell value (Date object or string) to 'yyyy-MM-dd'. */
+function sheetDateStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
+  return v?.toString().trim().substring(0, 10) || '';
+}
+
 /** Append today's closing price for each symbol (skips if already recorded). */
 function recordPrices() {
   const sheet = ensurePricesSheet();
@@ -631,7 +637,7 @@ function recordPrices() {
   const existingData = sheet.getDataRange().getValues();
   const recordedToday = new Set();
   for (let i = 1; i < existingData.length; i++) {
-    if (existingData[i][0]?.toString().substring(0, 10) === today) {
+    if (sheetDateStr(existingData[i][0]) === today) {
       recordedToday.add(existingData[i][1]?.toString());
     }
   }
@@ -651,13 +657,36 @@ function recordPrices() {
   }
 }
 
+/** One-time cleanup: remove duplicate date+symbol rows from the Prices sheet. */
+function dedupPrices() {
+  const sheet = ensurePricesSheet();
+  const data = sheet.getDataRange().getValues();
+  const seen = new Set();
+  const rowsToDelete = [];
+  for (let i = 1; i < data.length; i++) {
+    const d = sheetDateStr(data[i][0]);
+    const s = data[i][1]?.toString();
+    const key = `${d}|${s}`;
+    if (seen.has(key)) {
+      rowsToDelete.push(i + 1); // 1-indexed sheet row
+    } else {
+      seen.add(key);
+    }
+  }
+  // Delete from bottom up to avoid index shifting
+  for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+    sheet.deleteRow(rowsToDelete[i]);
+  }
+  Logger.log(`Removed ${rowsToDelete.length} duplicate rows from Prices sheet`);
+}
+
 /** Backfill up to 5 years of daily prices; skips rows already present. */
 function backfillPrices() {
   const sheet = ensurePricesSheet();
   const existingData = sheet.getDataRange().getValues();
   const existing = new Set();
   for (let i = 1; i < existingData.length; i++) {
-    const d = existingData[i][0]?.toString().substring(0, 10);
+    const d = sheetDateStr(existingData[i][0]);
     const s = existingData[i][1]?.toString();
     if (d && s) existing.add(`${d}|${s}`);
   }
