@@ -72,6 +72,9 @@
 
     // Load ticker charts independently (non-blocking, has its own error handling)
     initTickers(document.getElementById('tickers-container'));
+
+    // Load economic/AI indicators independently
+    initIndicators(document.getElementById('indicators-container'));
   } catch (err) {
     loadingEl.classList.add('hidden');
     console.error('Failed to load dashboard data:', err);

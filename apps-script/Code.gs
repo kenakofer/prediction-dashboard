@@ -715,6 +715,116 @@ function backfillPrices() {
   }
 }
 
+// ── BLS Economic Indicators (CPI + Gas prices) ───────────────
+
+const BLS_SERIES = {
+  'CPI':            'CUUR0000SA0',    // CPI-U All Items
+  'Gas-Regular':    'APU000074714',   // US city avg, regular unleaded
+  'Gas-Premium':    'APU000074715',   // premium unleaded
+  'Gas-Diesel':     'APU000074716',   // diesel
+};
+
+/**
+ * Fetch monthly BLS data for all indicator series.
+ * Returns [[date, seriesName, value], ...]
+ */
+function fetchBLS(startYear, endYear) {
+  const seriesIds = Object.values(BLS_SERIES);
+  const idToName = {};
+  for (const [name, id] of Object.entries(BLS_SERIES)) idToName[id] = name;
+
+  // BLS v2 allows up to 50 series, 20-year span
+  const url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/';
+  const payload = JSON.stringify({ seriesid: seriesIds, startyear: String(startYear), endyear: String(endYear) });
+  const resp = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: payload,
+    muteHttpExceptions: true,
+  });
+  if (resp.getResponseCode() !== 200) {
+    Logger.log(`BLS HTTP ${resp.getResponseCode()}`);
+    return [];
+  }
+  const data = JSON.parse(resp.getContentText());
+  if (data.status !== 'REQUEST_SUCCEEDED') {
+    Logger.log(`BLS status: ${data.status} — ${JSON.stringify(data.message)}`);
+    return [];
+  }
+
+  const rows = [];
+  for (const series of data.Results.series) {
+    const name = idToName[series.seriesID] || series.seriesID;
+    for (const item of series.data) {
+      const month = item.period.substring(1); // "M01" -> "01"
+      if (month === '13') continue; // annual average
+      const dateStr = `${item.year}-${month}-01`;
+      const value = parseFloat(item.value);
+      if (!isNaN(value)) rows.push([dateStr, name, value]);
+    }
+  }
+  return rows;
+}
+
+/** Create Indicators sheet if missing. */
+function ensureIndicatorsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Indicators');
+  if (!sheet) {
+    sheet = ss.insertSheet('Indicators');
+    sheet.getRange('A1:C1').setValues([['date', 'series', 'value']]);
+    Logger.log(`Created Indicators sheet (GID: ${sheet.getSheetId()})`);
+  }
+  return sheet;
+}
+
+/** Backfill BLS indicators (CPI + gas prices), dedup-safe. */
+function backfillIndicators() {
+  const sheet = ensureIndicatorsSheet();
+  const existingData = sheet.getDataRange().getValues();
+  const existing = new Set();
+  for (let i = 1; i < existingData.length; i++) {
+    const d = sheetDateStr(existingData[i][0]);
+    const s = existingData[i][1]?.toString();
+    if (d && s) existing.add(`${d}|${s}`);
+  }
+
+  const currentYear = new Date().getFullYear();
+  const rows = fetchBLS(currentYear - 10, currentYear);
+  const newRows = rows.filter(r => !existing.has(`${r[0]}|${r[1]}`));
+
+  if (newRows.length > 0) {
+    newRows.sort((a, b) => a[0].localeCompare(b[0]));
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
+    Logger.log(`Backfilled ${newRows.length} indicator points`);
+  } else {
+    Logger.log('No new indicator data to backfill');
+  }
+}
+
+/** Record latest month's indicator values (called by trigger). */
+function recordIndicators() {
+  const sheet = ensureIndicatorsSheet();
+  const existingData = sheet.getDataRange().getValues();
+  const existing = new Set();
+  for (let i = 1; i < existingData.length; i++) {
+    const d = sheetDateStr(existingData[i][0]);
+    const s = existingData[i][1]?.toString();
+    if (d && s) existing.add(`${d}|${s}`);
+  }
+
+  const currentYear = new Date().getFullYear();
+  const rows = fetchBLS(currentYear, currentYear);
+  const newRows = rows.filter(r => !existing.has(`${r[0]}|${r[1]}`));
+
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
+    Logger.log(`Recorded ${newRows.length} new indicator values`);
+  } else {
+    Logger.log('Indicators already up to date');
+  }
+}
+
 // ── Setup helper ──────────────────────────────────────────────
 
 /** Run this once to set up the time trigger */
@@ -737,7 +847,11 @@ function createTrigger() {
   ScriptApp.newTrigger('recordPrices')
     .timeBased().atHour(22).everyDays(1).create();
 
-  Logger.log('Triggers created: 8 AM and 8 PM (probabilities), 10 PM (prices) daily');
+  // Monthly indicators (BLS data published monthly); check daily, dedup handles it
+  ScriptApp.newTrigger('recordIndicators')
+    .timeBased().atHour(9).everyDays(1).create();
+
+  Logger.log('Triggers created: 8 AM/8 PM (probabilities), 10 PM (prices), 9 AM (indicators) daily');
 }
 
 // ── Web App API ───────────────────────────────────────────────
@@ -780,7 +894,7 @@ function handleAction(body) {
 
   // Actions that don't require a sheet
   if (body.action === 'run') {
-    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices };
+    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, dedupPrices };
     const fn = allowed[body.function];
     if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
     fn();
