@@ -158,7 +158,7 @@ const ChartRenderer = (() => {
     h3.textContent = question.title;
     card.appendChild(h3);
 
-    // Current probabilities — one tag per market
+    // Current probabilities — one tag per market (clickable, links to market URL)
     const latestProbs = DataService.getLatestProbabilities(historyEntries);
     const probDiv = document.createElement('div');
     probDiv.className = 'current-prob';
@@ -166,9 +166,11 @@ const ChartRenderer = (() => {
     for (const m of (marketsForQuestion || [])) {
       const latest = latestProbs[m.slug];
       if (latest) {
-        probParts.push(
-          `<span class="platform-tag ${m.platform}">${m.label}</span> <span>${latest.probability.toFixed(1)}%</span>`
-        );
+        const url = marketUrl(m);
+        const tagHtml = url
+          ? `<a class="platform-tag ${m.platform}" href="${url}" target="_blank" rel="noopener">${m.label}</a>`
+          : `<span class="platform-tag ${m.platform}">${m.label}</span>`;
+        probParts.push(`${tagHtml} <span>${latest.probability.toFixed(1)}%</span>`);
       }
     }
     probDiv.innerHTML = probParts.length ? probParts.join('  ') : '<em>No data yet</em>';
@@ -180,21 +182,6 @@ const ChartRenderer = (() => {
     const canvas = document.createElement('canvas');
     wrapper.appendChild(canvas);
     card.appendChild(wrapper);
-
-    // Market links — one per market entry
-    const linksDiv = document.createElement('div');
-    linksDiv.className = 'links';
-    for (const m of (marketsForQuestion || [])) {
-      const url = marketUrl(m);
-      if (url) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.target = '_blank';
-        a.textContent = `${m.label} ↗`;
-        linksDiv.appendChild(a);
-      }
-    }
-    card.appendChild(linksDiv);
 
     container.appendChild(card);
 
