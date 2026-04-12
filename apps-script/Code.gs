@@ -1,63 +1,73 @@
 // ══════════════════════════════════════════════════════════════
 // Prediction Watch — Google Apps Script
-// Fetches current probabilities from prediction market APIs
-// and appends them to the History tab. Run via time trigger.
+// Fetches data from prediction market & financial APIs,
+// records to unified Data sheet. Run via time triggers.
 // ══════════════════════════════════════════════════════════════
 
-/** Main entry point — called by time trigger */
-function recordAllProbabilities() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const marketsSheet = ss.getSheetByName('Markets');
-  const historySheet = ss.getSheetByName('History');
+// ── Sheet helpers ─────────────────────────────────────────────
 
-  if (!marketsSheet || !historySheet) {
-    Logger.log('ERROR: Missing Markets or History sheet');
-    return;
-  }
-
-  const markets = getMarkets(marketsSheet);
-  const timestamp = new Date().toISOString();
-  const newRows = [];
-
-  for (const m of markets) {
-    let prob = null;
-    switch (m.platform) {
-      case 'manifold':   prob = fetchManifold(m.slug); break;
-      case 'polymarket': prob = fetchPolymarket(m.slug); break;
-      case 'kalshi':     prob = fetchKalshi(m.slug); break;
-      case 'metaculus':  prob = fetchMetaculus(m.slug, m.param); break;
-      default:
-        Logger.log(`Unknown platform: ${m.platform}`);
-    }
-    if (prob !== null) {
-      newRows.push([m.question_id, timestamp, m.platform, m.slug, prob]);
-    }
-  }
-
-  if (newRows.length > 0) {
-    historySheet
-      .getRange(historySheet.getLastRow() + 1, 1, newRows.length, 5)
-      .setValues(newRows);
-    Logger.log(`Recorded ${newRows.length} data points`);
-  } else {
-    Logger.log('No data points recorded this run');
-  }
+/** Safely convert a sheet cell value (Date object or string) to 'yyyy-MM-dd'. */
+function sheetDateStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
+  return v?.toString().trim().substring(0, 10) || '';
 }
 
-// ── Sheet parsing ─────────────────────────────────────────────
+/** Get or create the unified Data sheet. Columns: graph_id, date, series, value */
+function ensureDataSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Data');
+  if (!sheet) {
+    sheet = ss.insertSheet('Data');
+    sheet.getRange('A1:D1').setValues([['graph_id', 'date', 'series', 'value']]);
+    Logger.log(`Created Data sheet (GID: ${sheet.getSheetId()})`);
+  }
+  return sheet;
+}
 
-/** Read Markets tab: question_id, platform, slug, label, url, param */
-function getMarkets(sheet) {
+/** Build a Set of existing "graphId|date|series" keys from the Data sheet for dedup. */
+function getExistingDataKeys(sheet) {
+  const keys = new Set();
   const data = sheet.getDataRange().getValues();
-  const headers = data[0].map((h) => h.toString().trim().toLowerCase());
-  const markets = [];
+  for (let i = 1; i < data.length; i++) {
+    const gid = data[i][0]?.toString().trim();
+    const d = sheetDateStr(data[i][1]);
+    const s = data[i][2]?.toString().trim();
+    if (gid && d && s) keys.add(`${gid}|${d}|${s}`);
+  }
+  return keys;
+}
+
+/** Append rows to Data sheet, deduplicating against existing keys. Returns count added. */
+function appendDataRows(sheet, rows, existing) {
+  const newRows = [];
+  for (const row of rows) {
+    const day = row[1].length >= 10 ? row[1].slice(0, 10) : row[1];
+    const key = `${row[0]}|${day}|${row[2]}`;
+    if (!existing.has(key)) {
+      newRows.push(row);
+      existing.add(key);
+    }
+  }
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 4).setValues(newRows);
+  }
+  return newRows.length;
+}
+
+// ── Read Markets (Sources) from sheet ─────────────────────────
+
+/** Read Markets tab dynamically. Returns array of source objects. */
+function getSources(sheet) {
+  if (!sheet) sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Markets');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0].map(h => h.toString().trim().toLowerCase());
+  const sources = [];
 
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const r = {};
     headers.forEach((h, j) => {
       const v = row[j];
-      // Sheets auto-converts date strings (e.g. "2030-01-01") to Date objects; convert back to ISO
       if (v instanceof Date) {
         r[h] = Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
       } else {
@@ -65,17 +75,92 @@ function getMarkets(sheet) {
       }
     });
     if (!r['question_id'] || !r['platform'] || !r['slug']) continue;
-    markets.push({
-      question_id: r['question_id'],
+    sources.push({
+      graph_id: r['question_id'],
       platform: r['platform'].toLowerCase(),
       slug: r['slug'],
       label: r['label'] || '',
       url: r['url'] || '',
-      param: r['param'] || '',  // e.g. "2030-01-01" for Metaculus date questions
+      param: r['param'] || '',
+      color: r['color'] || '',
     });
   }
+  return sources;
+}
 
-  return markets;
+/** Filter sources by platform(s). */
+function getSourcesByPlatform(platforms) {
+  const all = getSources();
+  const set = new Set(Array.isArray(platforms) ? platforms : [platforms]);
+  return all.filter(s => set.has(s.platform));
+}
+
+// ── Recording functions (called by triggers) ──────────────────
+
+/** Record current probabilities for all prediction market sources. */
+function recordAllProbabilities() {
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform(['manifold', 'polymarket', 'kalshi', 'metaculus']);
+  const existing = getExistingDataKeys(sheet);
+  const timestamp = new Date().toISOString();
+  const rows = [];
+
+  for (const s of sources) {
+    let prob = null;
+    switch (s.platform) {
+      case 'manifold':   prob = fetchManifold(s.slug); break;
+      case 'polymarket': prob = fetchPolymarket(s.slug); break;
+      case 'kalshi':     prob = fetchKalshi(s.slug); break;
+      case 'metaculus':  prob = fetchMetaculus(s.slug, s.param); break;
+    }
+    if (prob !== null) {
+      rows.push([s.graph_id, timestamp, s.slug, prob]);
+    }
+  }
+
+  const added = appendDataRows(sheet, rows, existing);
+  Logger.log(`Recorded ${added} probability data points`);
+}
+
+/** Record today's closing prices for all yahoo sources. */
+function recordPrices() {
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform('yahoo');
+  if (sources.length === 0) { Logger.log('No yahoo sources configured'); return; }
+  const existing = getExistingDataKeys(sheet);
+  const rows = [];
+
+  for (const s of sources) {
+    const points = fetchYahooHistory(s.slug, 5);
+    if (!points || points.length === 0) { Logger.log(`${s.slug}: no data`); continue; }
+    const [dateStr, close] = points[points.length - 1];
+    rows.push([s.graph_id, dateStr, s.slug, close]);
+    Logger.log(`${s.slug}: ${dateStr} = ${close}`);
+  }
+
+  const added = appendDataRows(sheet, rows, existing);
+  Logger.log(`Recorded ${added} prices`);
+}
+
+/** Record latest BLS indicator values. */
+function recordIndicators() {
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform('bls');
+  if (sources.length === 0) { Logger.log('No BLS sources configured'); return; }
+  const existing = getExistingDataKeys(sheet);
+
+  // Build slug→graph_id mapping
+  const slugToGraph = {};
+  for (const s of sources) slugToGraph[s.slug] = s.graph_id;
+
+  const currentYear = new Date().getFullYear();
+  const blsRows = fetchBLS(sources.map(s => s.slug), currentYear, currentYear);
+  const rows = blsRows.map(([dateStr, seriesId, value]) =>
+    [slugToGraph[seriesId] || seriesId, dateStr, seriesId, value]
+  );
+
+  const added = appendDataRows(sheet, rows, existing);
+  Logger.log(`Recorded ${added} indicator values`);
 }
 
 // ── Platform API fetchers ─────────────────────────────────────
@@ -429,82 +514,39 @@ function logMetaculusQuestionFormat() {
 // ── Backfill from APIs (run manually once) ─────────────────────
 
 /**
- * Read existing History rows and return a Set of "qid|date|platform|slug" keys
- * for deduplication when backfilling.
- */
-function getExistingHistoryKeys(historySheet) {
-  const keys = new Set();
-  const data = historySheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    const qid = data[i][0]?.toString().trim();
-    const ts = data[i][1]?.toString().trim();
-    const platform = data[i][2]?.toString().trim();
-    const slug = data[i][3]?.toString().trim();
-    if (!qid || !ts) continue;
-    // Key by date (YYYY-MM-DD) to deduplicate at day level
-    const day = ts.length >= 10 ? ts.slice(0, 10) : ts;
-    keys.add(`${qid}|${day}|${platform}|${slug}`);
-  }
-  return keys;
-}
-
-/**
- * Optional: Backfill historical data from platform APIs.
- * Safe to run multiple times — skips dates already in History.
- * Note: Only Manifold and Polymarket provide public history APIs.
- * Kalshi and Metaculus do not expose historical data publicly.
+ * Backfill historical prediction market data. Reads Sources for manifold/polymarket,
+ * writes to unified Data sheet. Dedup-safe.
  */
 function backfillHistory() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const marketsSheet = ss.getSheetByName('Markets');
-  const historySheet = ss.getSheetByName('History');
-  const markets = getMarkets(marketsSheet);
-  const existingKeys = getExistingHistoryKeys(historySheet);
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform(['manifold', 'polymarket']);
+  const existing = getExistingDataKeys(sheet);
   let totalRows = 0;
-  let skippedRows = 0;
 
-  for (const m of markets) {
+  for (const s of sources) {
     let rows = [];
-    switch (m.platform) {
+    switch (s.platform) {
       case 'manifold':
-        rows = backfillManifold(m.question_id, m.slug);
+        rows = backfillManifold(s.graph_id, s.slug);
         break;
       case 'polymarket':
-        rows = backfillPolymarket(m.question_id, m.slug);
-        break;
-      case 'kalshi':
-        Logger.log(`Kalshi: No public history API for ${m.slug} — data collected going forward only`);
-        break;
-      case 'metaculus':
-        Logger.log(`Metaculus: No public history API for question ${m.slug} — data collected going forward only`);
+        rows = backfillPolymarket(s.graph_id, s.slug);
         break;
     }
-
-    // Deduplicate against existing history
-    const newRows = [];
-    for (const row of rows) {
-      const day = row[1].slice(0, 10); // timestamp → YYYY-MM-DD
-      const key = `${row[0]}|${day}|${row[2]}|${row[3]}`;
-      if (existingKeys.has(key)) {
-        skippedRows++;
-      } else {
-        newRows.push(row);
-        existingKeys.add(key); // prevent intra-batch dupes too
-      }
-    }
-
-    if (newRows.length > 0) {
-      historySheet
-        .getRange(historySheet.getLastRow() + 1, 1, newRows.length, 5)
-        .setValues(newRows);
-      totalRows += newRows.length;
-    }
+    const added = appendDataRows(sheet, rows, existing);
+    if (added > 0) Logger.log(`${s.platform}/${s.slug}: added ${added} rows`);
+    totalRows += added;
   }
 
-  Logger.log(`Backfilled ${totalRows} new rows (${skippedRows} duplicates skipped)`);
+  // Log platforms without history APIs
+  const noHistory = getSourcesByPlatform(['kalshi', 'metaculus']);
+  for (const s of noHistory) {
+    Logger.log(`${s.platform}: No public history API for ${s.slug} — data collected going forward only`);
+  }
+  Logger.log(`Backfilled ${totalRows} total history rows`);
 }
 
-function backfillManifold(questionId, slug) {
+function backfillManifold(graphId, slug) {
   try {
     const marketUrl = `https://api.manifold.markets/v0/slug/${slug}`;
     const marketResp = UrlFetchApp.fetch(marketUrl, { muteHttpExceptions: true });
@@ -517,7 +559,6 @@ function backfillManifold(questionId, slug) {
     if (betsResp.getResponseCode() !== 200) return [];
     const bets = JSON.parse(betsResp.getContentText());
 
-    // Sample: one point per day
     const byDay = {};
     for (const bet of bets) {
       if (bet.probAfter === undefined) continue;
@@ -530,14 +571,14 @@ function backfillManifold(questionId, slug) {
 
     return Object.values(byDay)
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-      .map((p) => [questionId, p.timestamp, 'manifold', slug, p.probability]);
+      .map(p => [graphId, p.timestamp, slug, p.probability]);
   } catch (e) {
     Logger.log(`Manifold backfill error (${slug}): ${e}`);
     return [];
   }
 }
 
-function backfillPolymarket(questionId, slug) {
+function backfillPolymarket(graphId, slug) {
   try {
     const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slug)}`;
     const gammaResp = UrlFetchApp.fetch(gammaUrl, { muteHttpExceptions: true });
@@ -557,13 +598,11 @@ function backfillPolymarket(questionId, slug) {
     if (resp.getResponseCode() !== 200) return [];
     const data = JSON.parse(resp.getContentText());
     const history = data.history || data;
-
     if (!Array.isArray(history)) return [];
 
-    return history.map((point) => [
-      questionId,
+    return history.map(point => [
+      graphId,
       new Date(point.t * 1000).toISOString(),
-      'polymarket',
       slug,
       Math.round(parseFloat(point.p) * 1000) / 10,
     ]);
@@ -573,9 +612,44 @@ function backfillPolymarket(questionId, slug) {
   }
 }
 
-// ── Stock price tracking ──────────────────────────────────────
+/** Backfill up to 5 years of daily prices for all yahoo sources. */
+function backfillPrices() {
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform('yahoo');
+  const existing = getExistingDataKeys(sheet);
+  let totalRows = 0;
 
-const PRICE_SYMBOLS = ['BTC-USD', 'ETH-USD', 'GRMN', '^GSPC', 'CL=F'];
+  for (const s of sources) {
+    const points = fetchYahooHistory(s.slug, 1825);
+    if (!points) { Logger.log(`${s.slug}: fetch failed`); continue; }
+    const rows = points.map(([dateStr, close]) => [s.graph_id, dateStr, s.slug, close]);
+    const added = appendDataRows(sheet, rows, existing);
+    Logger.log(`${s.slug}: added ${added} historical points`);
+    totalRows += added;
+  }
+  Logger.log(`Backfilled ${totalRows} total price points`);
+}
+
+/** Backfill BLS indicators (10 years), reads series from Sources. */
+function backfillIndicators() {
+  const sheet = ensureDataSheet();
+  const sources = getSourcesByPlatform('bls');
+  if (sources.length === 0) { Logger.log('No BLS sources configured'); return; }
+  const existing = getExistingDataKeys(sheet);
+
+  const slugToGraph = {};
+  for (const s of sources) slugToGraph[s.slug] = s.graph_id;
+
+  const currentYear = new Date().getFullYear();
+  const blsRows = fetchBLS(sources.map(s => s.slug), currentYear - 10, currentYear);
+  const rows = blsRows.map(([dateStr, seriesId, value]) =>
+    [slugToGraph[seriesId] || seriesId, dateStr, seriesId, value]
+  );
+  const added = appendDataRows(sheet, rows, existing);
+  Logger.log(`Backfilled ${added} indicator points`);
+}
+
+// ── Yahoo Finance ─────────────────────────────────────────────
 
 /** Fetch daily closes from Yahoo Finance. rangeDays controls how far back. */
 function fetchYahooHistory(symbol, rangeDays) {
@@ -612,128 +686,13 @@ function fetchYahooHistory(symbol, rangeDays) {
   }
 }
 
-/** Create Prices sheet if it doesn't exist; always returns the sheet. */
-function ensurePricesSheet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Prices');
-  if (!sheet) {
-    sheet = ss.insertSheet('Prices');
-    sheet.getRange('A1:C1').setValues([['date', 'symbol', 'close']]);
-    Logger.log(`Created Prices sheet (GID: ${sheet.getSheetId()})`);
-  }
-  return sheet;
-}
-
-/** Safely convert a sheet cell value (Date object or string) to 'yyyy-MM-dd'. */
-function sheetDateStr(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
-  return v?.toString().trim().substring(0, 10) || '';
-}
-
-/** Append today's closing price for each symbol (skips if already recorded). */
-function recordPrices() {
-  const sheet = ensurePricesSheet();
-  const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
-  const existingData = sheet.getDataRange().getValues();
-  const recordedToday = new Set();
-  for (let i = 1; i < existingData.length; i++) {
-    if (sheetDateStr(existingData[i][0]) === today) {
-      recordedToday.add(existingData[i][1]?.toString());
-    }
-  }
-
-  const newRows = [];
-  for (const symbol of PRICE_SYMBOLS) {
-    if (recordedToday.has(symbol)) { Logger.log(`${symbol}: already recorded today`); continue; }
-    const points = fetchYahooHistory(symbol, 5);
-    if (!points || points.length === 0) { Logger.log(`${symbol}: no data`); continue; }
-    const [dateStr, close] = points[points.length - 1];
-    newRows.push([dateStr, symbol, close]);
-    Logger.log(`${symbol}: ${dateStr} = ${close}`);
-  }
-  if (newRows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
-    Logger.log(`Recorded ${newRows.length} prices`);
-  }
-}
-
-/** One-time cleanup: remove duplicate date+symbol rows from the Prices sheet. */
-function dedupPrices() {
-  const sheet = ensurePricesSheet();
-  const data = sheet.getDataRange().getValues();
-  const seen = new Set();
-  const rowsToDelete = [];
-  for (let i = 1; i < data.length; i++) {
-    const d = sheetDateStr(data[i][0]);
-    const s = data[i][1]?.toString();
-    const key = `${d}|${s}`;
-    if (seen.has(key)) {
-      rowsToDelete.push(i + 1); // 1-indexed sheet row
-    } else {
-      seen.add(key);
-    }
-  }
-  // Delete from bottom up to avoid index shifting
-  for (let i = rowsToDelete.length - 1; i >= 0; i--) {
-    sheet.deleteRow(rowsToDelete[i]);
-  }
-  Logger.log(`Removed ${rowsToDelete.length} duplicate rows from Prices sheet`);
-}
-
-/** Backfill up to 5 years of daily prices; skips rows already present. */
-function backfillPrices() {
-  const sheet = ensurePricesSheet();
-  const existingData = sheet.getDataRange().getValues();
-  const existing = new Set();
-  for (let i = 1; i < existingData.length; i++) {
-    const d = sheetDateStr(existingData[i][0]);
-    const s = existingData[i][1]?.toString();
-    if (d && s) existing.add(`${d}|${s}`);
-  }
-
-  const allNewRows = [];
-  for (const symbol of PRICE_SYMBOLS) {
-    const points = fetchYahooHistory(symbol, 1825);
-    if (!points) { Logger.log(`${symbol}: fetch failed`); continue; }
-    let added = 0;
-    for (const [dateStr, close] of points) {
-      const key = `${dateStr}|${symbol}`;
-      if (!existing.has(key)) {
-        allNewRows.push([dateStr, symbol, close]);
-        existing.add(key);
-        added++;
-      }
-    }
-    Logger.log(`${symbol}: added ${added} historical points`);
-  }
-  if (allNewRows.length > 0) {
-    allNewRows.sort((a, b) => a[0].localeCompare(b[0]));
-    sheet.getRange(sheet.getLastRow() + 1, 1, allNewRows.length, 3).setValues(allNewRows);
-    Logger.log(`Backfilled ${allNewRows.length} total price points`);
-  } else {
-    Logger.log('No new price data to backfill');
-  }
-}
-
-// ── BLS Economic Indicators (CPI + Gas prices) ───────────────
-
-const BLS_SERIES = {
-  'CPI':            'CUUR0000SA0',    // CPI-U All Items
-  'Gas-Regular':    'APU000074714',   // US city avg, regular unleaded
-  'Gas-Premium':    'APU000074715',   // premium unleaded
-  'Gas-Diesel':     'APU000074716',   // diesel
-};
+// ── BLS Economic Indicators ───────────────────────────────────
 
 /**
- * Fetch monthly BLS data for all indicator series.
- * Returns [[date, seriesName, value], ...]
+ * Fetch monthly BLS data for given series IDs.
+ * Returns [[date, seriesId, value], ...]
  */
-function fetchBLS(startYear, endYear) {
-  const seriesIds = Object.values(BLS_SERIES);
-  const idToName = {};
-  for (const [name, id] of Object.entries(BLS_SERIES)) idToName[id] = name;
-
-  // BLS v2 allows up to 50 series, 20-year span
+function fetchBLS(seriesIds, startYear, endYear) {
   const url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/';
   const payload = JSON.stringify({ seriesid: seriesIds, startyear: String(startYear), endyear: String(endYear) });
   const resp = UrlFetchApp.fetch(url, {
@@ -754,86 +713,28 @@ function fetchBLS(startYear, endYear) {
 
   const rows = [];
   for (const series of data.Results.series) {
-    const name = idToName[series.seriesID] || series.seriesID;
     for (const item of series.data) {
       const month = item.period.substring(1); // "M01" -> "01"
       if (month === '13') continue; // annual average
       const dateStr = `${item.year}-${month}-01`;
       const value = parseFloat(item.value);
-      if (!isNaN(value)) rows.push([dateStr, name, value]);
+      if (!isNaN(value)) rows.push([dateStr, series.seriesID, value]);
     }
   }
   return rows;
 }
 
-/** Create Indicators sheet if missing. */
-function ensureIndicatorsSheet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Indicators');
-  if (!sheet) {
-    sheet = ss.insertSheet('Indicators');
-    sheet.getRange('A1:C1').setValues([['date', 'series', 'value']]);
-    Logger.log(`Created Indicators sheet (GID: ${sheet.getSheetId()})`);
-  }
-  return sheet;
-}
-
-/** Backfill BLS indicators (CPI + gas prices), dedup-safe. */
-function backfillIndicators() {
-  const sheet = ensureIndicatorsSheet();
-  const existingData = sheet.getDataRange().getValues();
-  const existing = new Set();
-  for (let i = 1; i < existingData.length; i++) {
-    const d = sheetDateStr(existingData[i][0]);
-    const s = existingData[i][1]?.toString();
-    if (d && s) existing.add(`${d}|${s}`);
-  }
-
-  const currentYear = new Date().getFullYear();
-  const rows = fetchBLS(currentYear - 10, currentYear);
-  const newRows = rows.filter(r => !existing.has(`${r[0]}|${r[1]}`));
-
-  if (newRows.length > 0) {
-    newRows.sort((a, b) => a[0].localeCompare(b[0]));
-    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
-    Logger.log(`Backfilled ${newRows.length} indicator points`);
-  } else {
-    Logger.log('No new indicator data to backfill');
-  }
-}
-
-/** Record latest month's indicator values (called by trigger). */
-function recordIndicators() {
-  const sheet = ensureIndicatorsSheet();
-  const existingData = sheet.getDataRange().getValues();
-  const existing = new Set();
-  for (let i = 1; i < existingData.length; i++) {
-    const d = sheetDateStr(existingData[i][0]);
-    const s = existingData[i][1]?.toString();
-    if (d && s) existing.add(`${d}|${s}`);
-  }
-
-  const currentYear = new Date().getFullYear();
-  const rows = fetchBLS(currentYear, currentYear);
-  const newRows = rows.filter(r => !existing.has(`${r[0]}|${r[1]}`));
-
-  if (newRows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
-    Logger.log(`Recorded ${newRows.length} new indicator values`);
-  } else {
-    Logger.log('Indicators already up to date');
-  }
-}
-
 // ── METR Time Horizon data ────────────────────────────────────
 
 /**
- * Fetch METR time horizon benchmark data from metr.org, extract the embedded
- * JSON, and write to the Indicators sheet as series "METR:{ModelName}".
- * Dedup-safe: skips rows already present.
+ * Fetch METR time horizon data, write to Data sheet.
+ * Reads the graph_id from Sources where platform='metr'.
  */
 function backfillMETR() {
-  const sheet = ensureIndicatorsSheet();
+  const sheet = ensureDataSheet();
+  const metrSources = getSourcesByPlatform('metr');
+  const graphId = metrSources.length > 0 ? metrSources[0].graph_id : 'metr-horizon';
+  const existing = getExistingDataKeys(sheet);
 
   const resp = UrlFetchApp.fetch('https://metr.org/time-horizons/', { muteHttpExceptions: true });
   if (resp.getResponseCode() !== 200) {
@@ -842,24 +743,14 @@ function backfillMETR() {
   }
   const html = resp.getContentText();
 
-  // Try v1.1 first, fall back to v1.0
   let benchmarkData = extractMETRJson(html, 'benchmarkDataV1_1') || extractMETRJson(html, 'benchmarkDataV1');
   if (!benchmarkData) {
     Logger.log('Could not extract METR benchmark data from page');
     return;
   }
 
-  // Build existing-row set for dedup
-  const existingData = sheet.getDataRange().getValues();
-  const existing = new Set();
-  for (let i = 1; i < existingData.length; i++) {
-    const d = sheetDateStr(existingData[i][0]);
-    const s = existingData[i][1]?.toString();
-    if (d && s) existing.add(`${d}|${s}`);
-  }
-
   const results = benchmarkData.results || {};
-  const newRows = [];
+  const rows = [];
 
   for (const [key, model] of Object.entries(results)) {
     const metrics = model.metrics || {};
@@ -867,26 +758,13 @@ function backfillMETR() {
     const releaseDate = model.release_date;
     if (p50 == null || !releaseDate) continue;
 
-    // Clean model name
     let name = key.replace(/_inspect$/, '').replace(/_/g, ' ');
     name = name.replace(/\b\w/g, c => c.toUpperCase());
-    const seriesName = `METR:${name}`;
-
-    const dateStr = releaseDate; // Already yyyy-MM-dd format
-    const rowKey = `${dateStr}|${seriesName}`;
-    if (!existing.has(rowKey)) {
-      newRows.push([dateStr, seriesName, p50]);
-      existing.add(rowKey);
-    }
+    rows.push([graphId, releaseDate, `METR:${name}`, p50]);
   }
 
-  if (newRows.length > 0) {
-    newRows.sort((a, b) => a[0].localeCompare(b[0]));
-    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
-    Logger.log(`Backfilled ${newRows.length} METR data points`);
-  } else {
-    Logger.log('METR data already up to date');
-  }
+  const added = appendDataRows(sheet, rows, existing);
+  Logger.log(`Backfilled ${added} METR data points`);
 }
 
 /** Extract a named JS object from HTML. Returns parsed object or null. */
@@ -905,19 +783,129 @@ function extractMETRJson(html, varName) {
   catch (e) { Logger.log(`Failed to parse ${varName}: ${e.message}`); return null; }
 }
 
-// ── Setup helper ──────────────────────────────────────────────
+// ── One-time cleanup ──────────────────────────────────────────
 
-/** Run this once to set up the time trigger */
-function createTrigger() {
-  // Delete existing triggers for this function
-  const triggers = ScriptApp.getProjectTriggers();
-  for (const trigger of triggers) {
-    if (trigger.getHandlerFunction() === 'recordAllProbabilities') {
-      ScriptApp.deleteTrigger(trigger);
+/** Remove duplicate graph_id+date+series rows from the Data sheet. */
+function dedupData() {
+  const sheet = ensureDataSheet();
+  const data = sheet.getDataRange().getValues();
+  const seen = new Set();
+  const rowsToDelete = [];
+  for (let i = 1; i < data.length; i++) {
+    const gid = data[i][0]?.toString().trim();
+    const d = sheetDateStr(data[i][1]);
+    const s = data[i][2]?.toString().trim();
+    const key = `${gid}|${d}|${s}`;
+    if (seen.has(key)) {
+      rowsToDelete.push(i + 1);
+    } else {
+      seen.add(key);
     }
   }
+  for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+    sheet.deleteRow(rowsToDelete[i]);
+  }
+  Logger.log(`Removed ${rowsToDelete.length} duplicate rows from Data sheet`);
+}
 
-  // Twice daily: 8 AM and 8 PM
+// ── Migration: merge old sheets into Data ─────────────────────
+
+/**
+ * One-time migration: copies History, Prices, Indicators into the unified Data sheet.
+ * Requires Markets to have the new source rows (yahoo, bls, metr) already added.
+ * Safe to run multiple times (dedup).
+ */
+function migrateToUnifiedData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dataSheet = ensureDataSheet();
+  const existing = getExistingDataKeys(dataSheet);
+  let totalAdded = 0;
+
+  // 1. Migrate History → Data
+  const historySheet = ss.getSheetByName('History');
+  if (historySheet) {
+    const hData = historySheet.getDataRange().getValues();
+    const rows = [];
+    for (let i = 1; i < hData.length; i++) {
+      const qid = hData[i][0]?.toString().trim();
+      const ts = hData[i][1];
+      const slug = hData[i][3]?.toString().trim();
+      const prob = parseFloat(hData[i][4]);
+      if (!qid || isNaN(prob)) continue;
+      const dateStr = (ts instanceof Date) ? ts.toISOString() : ts?.toString().trim();
+      rows.push([qid, dateStr, slug, prob]);
+    }
+    const added = appendDataRows(dataSheet, rows, existing);
+    Logger.log(`History → Data: migrated ${added} rows`);
+    totalAdded += added;
+  }
+
+  // 2. Migrate Prices → Data (need slug→graph_id mapping from Sources)
+  const pricesSheet = ss.getSheetByName('Prices');
+  if (pricesSheet) {
+    const sources = getSourcesByPlatform('yahoo');
+    const slugToGraph = {};
+    for (const s of sources) slugToGraph[s.slug] = s.graph_id;
+
+    const pData = pricesSheet.getDataRange().getValues();
+    const rows = [];
+    for (let i = 1; i < pData.length; i++) {
+      const dateStr = sheetDateStr(pData[i][0]);
+      const symbol = pData[i][1]?.toString().trim();
+      const close = parseFloat(pData[i][2]);
+      if (!dateStr || !symbol || isNaN(close)) continue;
+      const graphId = slugToGraph[symbol];
+      if (!graphId) { continue; } // symbol not in Sources yet
+      rows.push([graphId, dateStr, symbol, close]);
+    }
+    const added = appendDataRows(dataSheet, rows, existing);
+    Logger.log(`Prices → Data: migrated ${added} rows`);
+    totalAdded += added;
+  }
+
+  // 3. Migrate Indicators → Data
+  const indSheet = ss.getSheetByName('Indicators');
+  if (indSheet) {
+    const sources = getSourcesByPlatform(['bls', 'metr']);
+    const slugToGraph = {};
+    for (const s of sources) slugToGraph[s.slug] = s.graph_id;
+
+    const iData = indSheet.getDataRange().getValues();
+    const rows = [];
+    for (let i = 1; i < iData.length; i++) {
+      const dateStr = sheetDateStr(iData[i][0]);
+      const series = iData[i][1]?.toString().trim();
+      const value = parseFloat(iData[i][2]);
+      if (!dateStr || !series || isNaN(value)) continue;
+
+      // For BLS series, look up graph_id; for METR, use the metr source's graph_id
+      let graphId = slugToGraph[series];
+      if (!graphId && series.startsWith('METR:')) {
+        // Find the metr source
+        const metrSource = sources.find(s => s.platform === 'metr');
+        graphId = metrSource ? metrSource.graph_id : 'metr-horizon';
+      }
+      if (!graphId) continue;
+      rows.push([graphId, dateStr, series, value]);
+    }
+    const added = appendDataRows(dataSheet, rows, existing);
+    Logger.log(`Indicators → Data: migrated ${added} rows`);
+    totalAdded += added;
+  }
+
+  Logger.log(`Migration complete: ${totalAdded} total rows added to Data sheet (GID: ${dataSheet.getSheetId()})`);
+}
+
+// ── Setup helper ──────────────────────────────────────────────
+
+/** Run this once to set up all time triggers. Clears existing triggers first. */
+function createTrigger() {
+  // Delete all existing project triggers
+  for (const trigger of ScriptApp.getProjectTriggers()) {
+    ScriptApp.deleteTrigger(trigger);
+  }
+
+  // Twice daily: 8 AM and 8 PM — prediction markets
   ScriptApp.newTrigger('recordAllProbabilities')
     .timeBased().atHour(8).everyDays(1).create();
   ScriptApp.newTrigger('recordAllProbabilities')
@@ -974,7 +962,7 @@ function handleAction(body) {
 
   // Actions that don't require a sheet
   if (body.action === 'run') {
-    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, dedupPrices, backfillMETR };
+    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, backfillMETR, dedupData, migrateToUnifiedData, createTrigger };
     const fn = allowed[body.function];
     if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
     fn();

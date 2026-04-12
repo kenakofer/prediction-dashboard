@@ -1,5 +1,6 @@
 #!/bin/bash
 # Quick deployment script for Apps Script code
+# Pushes code AND redeploys the web app in one step.
 
 set -e
 
@@ -19,11 +20,18 @@ if [ ! -f .clasp.json ]; then
 fi
 
 echo "🚀 Pushing Apps Script code..."
-clasp push
+clasp push --force
+
+# Deployment ID from the published web app URL
+DEPLOY_ID="AKfycbz7Zw9RqWoP-FxmE5zmkay8lR4s9ltlZGLy6Y7YqDKPh_c78bdA67XCKvg6Z_Dc08HR"
+
+echo "🔄 Redeploying web app..."
+if clasp deploy -i "$DEPLOY_ID" 2>/dev/null; then
+  echo "✅ Web app redeployed!"
+else
+  echo "⚠️  Auto-redeploy failed. Please redeploy manually:"
+  echo "   clasp open → Deploy → Manage deployments → Edit → New version → Deploy"
+fi
 
 echo ""
-echo "✅ Code pushed to Apps Script!"
-echo ""
-echo "📝 Next steps:"
-echo "  - Run 'clasp open' to view in browser"
-echo "  - Or go to: https://script.google.com/home"
+echo "✅ Done! Code pushed and web app updated."
