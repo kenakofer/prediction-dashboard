@@ -3,16 +3,16 @@
 // ──────────────────────────────────────────────
 
 const CONFIG = {
-  // Replace with your Google Sheet ID (the long string in the sheet URL)
-  // Example: https://docs.google.com/spreadsheets/d/THIS_PART_HERE/edit
-  SHEET_ID: '1QtVCh1IjjnjoqyUXU-Tz8dTHfBGfiOTJkTp4stE4tVo',
+  // Published spreadsheet ID (from File → Share → Publish to web URL)
+  // Format: https://docs.google.com/spreadsheets/d/e/PUBLISH_ID/pub?output=csv
+  PUBLISH_ID: '2PACX-1vRKFD-iGUfn7rWfWiZ63tJS8MJcew3gdzIrvaKhG2VXd1dRIJY_Rlzo4BFfoJ9jknlVoyzO0XCy7hMf',
 
-  // Tab names in your Google Sheet (must match exactly)
-  TABS: {
-    QUESTIONS: 'Questions',
-    MARKETS: 'Markets',
-    HISTORY: 'History',
-    ANNOTATIONS: 'Annotations',
+  // Tab GIDs — click each tab in Sheets and read #gid=XXXXXXXX from the URL
+  SHEET_GIDS: {
+    QUESTIONS:   0,
+    MARKETS:     121572886,
+    HISTORY:     21183126,
+    ANNOTATIONS: 1666890327,
   },
 
   // Platform display colors (match CSS variables)
@@ -38,8 +38,9 @@ const CONFIG = {
     [8, 3, 2, 3], // dash-dot
   ],
 
-  // Build a CSV URL for a given tab
-  csvUrl(tabName) {
-    return `https://docs.google.com/spreadsheets/d/${this.SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+  // Build a CSV URL for a given tab using the CORS-friendly pub endpoint
+  csvUrl(tabKey) {
+    const gid = this.SHEET_GIDS[tabKey.toUpperCase()];
+    return `https://docs.google.com/spreadsheets/d/e/${this.PUBLISH_ID}/pub?output=csv&gid=${gid}`;
   },
 };

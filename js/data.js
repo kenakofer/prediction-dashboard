@@ -113,10 +113,10 @@ const DataService = (() => {
   /** Main entry point: fetch all 4 CSV tabs and return structured data */
   async function loadAll() {
     const [questionsRaw, marketsRaw, historyRaw, annotationsRaw] = await Promise.all([
-      fetchCsv(CONFIG.csvUrl(CONFIG.TABS.QUESTIONS)),
-      fetchCsv(CONFIG.csvUrl(CONFIG.TABS.MARKETS)),
-      fetchCsv(CONFIG.csvUrl(CONFIG.TABS.HISTORY)),
-      fetchCsv(CONFIG.csvUrl(CONFIG.TABS.ANNOTATIONS)),
+      fetchCsv(CONFIG.csvUrl('QUESTIONS')),
+      fetchCsv(CONFIG.csvUrl('MARKETS')),
+      fetchCsv(CONFIG.csvUrl('HISTORY')),
+      fetchCsv(CONFIG.csvUrl('ANNOTATIONS')),
     ]);
 
     const questions = parseQuestions(questionsRaw);
