@@ -3,3 +3,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# clasp
+.clasp.json

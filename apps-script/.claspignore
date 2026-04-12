@@ -1,0 +1,4 @@
+# Exclude from clasp push
+*.md
+setup.md
+DEPLOY.md
