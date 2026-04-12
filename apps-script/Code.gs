@@ -573,6 +573,119 @@ function backfillPolymarket(questionId, slug) {
   }
 }
 
+// ── Stock price tracking ──────────────────────────────────────
+
+const PRICE_SYMBOLS = ['GRMN', '^GSPC', 'CL=F'];
+
+/** Fetch daily closes from Yahoo Finance. rangeDays controls how far back. */
+function fetchYahooHistory(symbol, rangeDays) {
+  const rangeParam =
+    rangeDays <= 30  ? '1mo' :
+    rangeDays <= 90  ? '3mo' :
+    rangeDays <= 180 ? '6mo' :
+    rangeDays <= 365 ? '1y'  :
+    rangeDays <= 730 ? '2y'  : '5y';
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${rangeParam}&interval=1d`;
+  try {
+    const resp = UrlFetchApp.fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GoogleAppsScript)' },
+      muteHttpExceptions: true,
+    });
+    if (resp.getResponseCode() !== 200) {
+      Logger.log(`Yahoo ${symbol}: HTTP ${resp.getResponseCode()}`);
+      return null;
+    }
+    const data = JSON.parse(resp.getContentText());
+    const result = data.chart.result[0];
+    const timestamps = result.timestamp;
+    const closes = result.indicators.quote[0].close;
+    const points = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] == null) continue;
+      const date = new Date(timestamps[i] * 1000);
+      points.push([Utilities.formatDate(date, 'UTC', 'yyyy-MM-dd'), closes[i]]);
+    }
+    return points;
+  } catch (e) {
+    Logger.log(`Yahoo ${symbol} error: ${e.message}`);
+    return null;
+  }
+}
+
+/** Create Prices sheet if it doesn't exist; always returns the sheet. */
+function ensurePricesSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Prices');
+  if (!sheet) {
+    sheet = ss.insertSheet('Prices');
+    sheet.getRange('A1:C1').setValues([['date', 'symbol', 'close']]);
+    Logger.log(`Created Prices sheet (GID: ${sheet.getSheetId()})`);
+  }
+  return sheet;
+}
+
+/** Append today's closing price for each symbol (skips if already recorded). */
+function recordPrices() {
+  const sheet = ensurePricesSheet();
+  const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+  const existingData = sheet.getDataRange().getValues();
+  const recordedToday = new Set();
+  for (let i = 1; i < existingData.length; i++) {
+    if (existingData[i][0]?.toString().substring(0, 10) === today) {
+      recordedToday.add(existingData[i][1]?.toString());
+    }
+  }
+
+  const newRows = [];
+  for (const symbol of PRICE_SYMBOLS) {
+    if (recordedToday.has(symbol)) { Logger.log(`${symbol}: already recorded today`); continue; }
+    const points = fetchYahooHistory(symbol, 5);
+    if (!points || points.length === 0) { Logger.log(`${symbol}: no data`); continue; }
+    const [dateStr, close] = points[points.length - 1];
+    newRows.push([dateStr, symbol, close]);
+    Logger.log(`${symbol}: ${dateStr} = ${close}`);
+  }
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
+    Logger.log(`Recorded ${newRows.length} prices`);
+  }
+}
+
+/** Backfill up to 5 years of daily prices; skips rows already present. */
+function backfillPrices() {
+  const sheet = ensurePricesSheet();
+  const existingData = sheet.getDataRange().getValues();
+  const existing = new Set();
+  for (let i = 1; i < existingData.length; i++) {
+    const d = existingData[i][0]?.toString().substring(0, 10);
+    const s = existingData[i][1]?.toString();
+    if (d && s) existing.add(`${d}|${s}`);
+  }
+
+  const allNewRows = [];
+  for (const symbol of PRICE_SYMBOLS) {
+    const points = fetchYahooHistory(symbol, 1825);
+    if (!points) { Logger.log(`${symbol}: fetch failed`); continue; }
+    let added = 0;
+    for (const [dateStr, close] of points) {
+      const key = `${dateStr}|${symbol}`;
+      if (!existing.has(key)) {
+        allNewRows.push([dateStr, symbol, close]);
+        existing.add(key);
+        added++;
+      }
+    }
+    Logger.log(`${symbol}: added ${added} historical points`);
+  }
+  if (allNewRows.length > 0) {
+    allNewRows.sort((a, b) => a[0].localeCompare(b[0]));
+    sheet.getRange(sheet.getLastRow() + 1, 1, allNewRows.length, 3).setValues(allNewRows);
+    Logger.log(`Backfilled ${allNewRows.length} total price points`);
+  } else {
+    Logger.log('No new price data to backfill');
+  }
+}
+
 // ── Setup helper ──────────────────────────────────────────────
 
 /** Run this once to set up the time trigger */
@@ -587,18 +700,15 @@ function createTrigger() {
 
   // Twice daily: 8 AM and 8 PM
   ScriptApp.newTrigger('recordAllProbabilities')
-    .timeBased()
-    .atHour(8)
-    .everyDays(1)
-    .create();
-
+    .timeBased().atHour(8).everyDays(1).create();
   ScriptApp.newTrigger('recordAllProbabilities')
-    .timeBased()
-    .atHour(20)
-    .everyDays(1)
-    .create();
+    .timeBased().atHour(20).everyDays(1).create();
 
-  Logger.log('Triggers created: 8 AM and 8 PM daily');
+  // Once daily: record stock prices at 10 PM (after US market close)
+  ScriptApp.newTrigger('recordPrices')
+    .timeBased().atHour(22).everyDays(1).create();
+
+  Logger.log('Triggers created: 8 AM and 8 PM (probabilities), 10 PM (prices) daily');
 }
 
 // ── Web App API ───────────────────────────────────────────────
@@ -641,11 +751,16 @@ function handleAction(body) {
 
   // Actions that don't require a sheet
   if (body.action === 'run') {
-    const allowed = { recordAllProbabilities, backfillHistory };
+    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices };
     const fn = allowed[body.function];
     if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
     fn();
     return jsonResponse({ success: true, ran: body.function });
+  }
+
+  if (body.action === 'get_sheets') {
+    const sheets = ss.getSheets();
+    return jsonResponse({ sheets: sheets.map(s => ({ name: s.getName(), gid: s.getSheetId() })) });
   }
 
   const sheet = ss.getSheetByName(body.sheet);

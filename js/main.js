@@ -69,6 +69,9 @@
     }
 
     loadingEl.classList.add('hidden');
+
+    // Load ticker charts independently (non-blocking, has its own error handling)
+    initTickers(document.getElementById('tickers-container'));
   } catch (err) {
     loadingEl.classList.add('hidden');
     console.error('Failed to load dashboard data:', err);

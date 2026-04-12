@@ -204,6 +204,36 @@ a.platform-tag:hover { filter: brightness(1.4); }
   border-radius: 50%;
 }
 
+/* ── Window toggle (ticker charts) ── */
+.window-toggle {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.window-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.window-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.window-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1117;
+  font-weight: 600;
+}
+
 /* ── Footer ── */
 footer {
   text-align: center;
