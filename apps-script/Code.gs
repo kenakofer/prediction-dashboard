@@ -55,7 +55,15 @@ function getMarkets(sheet) {
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const r = {};
-    headers.forEach((h, j) => (r[h] = row[j]?.toString().trim() || ''));
+    headers.forEach((h, j) => {
+      const v = row[j];
+      // Sheets auto-converts date strings (e.g. "2030-01-01") to Date objects; convert back to ISO
+      if (v instanceof Date) {
+        r[h] = Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
+      } else {
+        r[h] = v?.toString().trim() || '';
+      }
+    });
     if (!r['question_id'] || !r['platform'] || !r['slug']) continue;
     markets.push({
       question_id: r['question_id'],
