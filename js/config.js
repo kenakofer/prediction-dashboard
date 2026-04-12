@@ -5,7 +5,7 @@
 const CONFIG = {
   // Replace with your Google Sheet ID (the long string in the sheet URL)
   // Example: https://docs.google.com/spreadsheets/d/THIS_PART_HERE/edit
-  SHEET_ID: 'YOUR_GOOGLE_SHEET_ID_HERE',
+  SHEET_ID: '1QtVCh1IjjnjoqyUXU-Tz8dTHfBGfiOTJkTp4stE4tVo',
 
   // Tab names in your Google Sheet (must match exactly)
   TABS: {
