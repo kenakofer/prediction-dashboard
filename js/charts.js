@@ -467,6 +467,7 @@ const ChartRenderer = (() => {
 
     // Initial days from first window
     let currentDays = windowMonths ? Math.round(windowMonths[0] * 30.44) : null;
+    let chart = null;
 
     function buildChart(days) {
       if (chart) chart.destroy();
