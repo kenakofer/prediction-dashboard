@@ -488,7 +488,7 @@ const ChartRenderer = (() => {
       }
     }
 
-    let chart = buildChart(currentDays);
+    chart = buildChart(currentDays);
 
     // Wire up time window toggle
     if (toggleDiv && chart) {
