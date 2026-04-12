@@ -70,6 +70,14 @@ Edit `js/config.js` and replace `YOUR_GOOGLE_SHEET_ID_HERE` with your Sheet ID.
 3. Grant the necessary permissions when prompted
 4. This sets up **twice-daily** automatic data collection (8 AM and 8 PM)
 
+### Set up Metaculus API token (optional):
+
+Metaculus requires authentication. If you have Metaculus questions in your sheet:
+1. Go to [metaculus.com](https://www.metaculus.com/) → Profile → Settings → API Access
+2. Copy your API token
+3. In the Apps Script editor, go to **Project Settings** (⚙️) → **Script Properties**
+4. Add a property: Key = `METACULUS_API_TOKEN`, Value = your token
+
 ### Optional: Backfill historical data
 
 1. Select `backfillHistory` from the function dropdown

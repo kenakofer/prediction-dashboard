@@ -73,72 +73,79 @@ function getQuestions(sheet) {
 
 // ── Platform API fetchers ─────────────────────────────────────
 // Each returns a probability as a number 0-100, or null on error.
+//
+// Verified API response formats (April 2026):
+//   Manifold:   GET /v0/slug/{slug}  → { probability: 0.439 }
+//   Polymarket: GET gamma-api/markets?slug={slug} → [{ outcomePrices: '["0.23","0.77"]' }]
+//   Kalshi:     GET api.elections.kalshi.com/trade-api/v2/markets/{ticker} → { market: { last_price_dollars: "0.0800" } }
+//   Metaculus:  GET /api2/questions/{id}/ (requires auth token) → { community_prediction: { full: { q2: 0.45 } } }
 
-function fetchManifold(slugOrId) {
+function fetchManifold(slug) {
   try {
-    // slugOrId can be a full slug like "user/question-slug" or just a market ID
-    const url = `https://api.manifold.markets/v0/slug/${slugOrId}`;
+    // Slug is the question part of the URL, e.g. "will-we-get-agi-before-2030"
+    // The /v0/slug/ endpoint returns { probability: 0.0-1.0 }
+    const url = `https://api.manifold.markets/v0/slug/${slug}`;
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() !== 200) {
-      // Try as market ID
-      const url2 = `https://api.manifold.markets/v0/market/${slugOrId}`;
+      // Fallback: try as a market ID
+      const url2 = `https://api.manifold.markets/v0/market/${slug}`;
       const resp2 = UrlFetchApp.fetch(url2, { muteHttpExceptions: true });
       if (resp2.getResponseCode() !== 200) return null;
       const data = JSON.parse(resp2.getContentText());
       return Math.round(data.probability * 1000) / 10;
     }
     const data = JSON.parse(resp.getContentText());
-    return Math.round(data.probability * 1000) / 10; // e.g. 65.3
+    return Math.round(data.probability * 1000) / 10; // e.g. 0.439 → 43.9
   } catch (e) {
-    Logger.log(`Manifold error (${slugOrId}): ${e}`);
+    Logger.log(`Manifold error (${slug}): ${e}`);
     return null;
   }
 }
 
-function fetchPolymarket(slugOrId) {
+function fetchPolymarket(slug) {
   try {
-    // Try the gamma API to look up by slug
-    const url = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slugOrId)}`;
+    // The gamma API returns an array of markets matching the slug.
+    // outcomePrices is a JSON string: '["0.23","0.77"]' where index 0 = Yes probability.
+    const url = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slug)}`;
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() !== 200) return null;
     const data = JSON.parse(resp.getContentText());
 
     if (Array.isArray(data) && data.length > 0) {
       const market = data[0];
-      const price = parseFloat(market.outcomePrices?.[0] || market.bestAsk || market.lastTradePrice);
-      if (!isNaN(price)) return Math.round(price * 1000) / 10;
-    }
-
-    // If slug didn't work, try as condition_id via CLOB
-    const url2 = `https://clob.polymarket.com/market/${slugOrId}`;
-    const resp2 = UrlFetchApp.fetch(url2, { muteHttpExceptions: true });
-    if (resp2.getResponseCode() !== 200) return null;
-    const data2 = JSON.parse(resp2.getContentText());
-    const tokens = data2.tokens;
-    if (tokens && tokens.length > 0) {
-      const yesToken = tokens.find((t) => t.outcome === 'Yes') || tokens[0];
-      const price2 = parseFloat(yesToken.price);
-      if (!isNaN(price2)) return Math.round(price2 * 1000) / 10;
+      // outcomePrices is a JSON-encoded string array like '["0.23","0.77"]'
+      let prices = market.outcomePrices;
+      if (typeof prices === 'string') prices = JSON.parse(prices);
+      if (Array.isArray(prices) && prices.length > 0) {
+        const yesPrice = parseFloat(prices[0]);
+        if (!isNaN(yesPrice)) return Math.round(yesPrice * 1000) / 10; // e.g. 0.23 → 23.0
+      }
     }
 
     return null;
   } catch (e) {
-    Logger.log(`Polymarket error (${slugOrId}): ${e}`);
+    Logger.log(`Polymarket error (${slug}): ${e}`);
     return null;
   }
 }
 
 function fetchKalshi(ticker) {
   try {
-    const url = `https://trading-api.kalshi.com/trade-api/v2/markets/${ticker}`;
+    // Kalshi's public read API is at api.elections.kalshi.com (no auth needed).
+    // Response: { market: { last_price_dollars: "0.0800", yes_ask_dollars: "0.1000", ... } }
+    // Prices are in dollar strings where $1.00 = 100%.
+    const url = `https://api.elections.kalshi.com/trade-api/v2/markets/${ticker}`;
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() !== 200) return null;
     const data = JSON.parse(resp.getContentText());
     const market = data.market;
     if (!market) return null;
-    // yes_ask is in cents (0-100)
-    const prob = market.last_price || market.yes_ask || market.yes_bid;
-    if (prob !== undefined) return Math.round(prob * 10) / 10;
+    // Prefer last_price_dollars, fall back to yes_bid/ask midpoint
+    const lastPrice = parseFloat(market.last_price_dollars);
+    if (!isNaN(lastPrice) && lastPrice > 0) return Math.round(lastPrice * 1000) / 10; // e.g. "0.0800" → 8.0
+    const yesAsk = parseFloat(market.yes_ask_dollars);
+    const yesBid = parseFloat(market.yes_bid_dollars);
+    if (!isNaN(yesAsk) && !isNaN(yesBid)) return Math.round(((yesAsk + yesBid) / 2) * 1000) / 10;
     return null;
   } catch (e) {
     Logger.log(`Kalshi error (${ticker}): ${e}`);
@@ -148,18 +155,34 @@ function fetchKalshi(ticker) {
 
 function fetchMetaculus(questionId) {
   try {
+    // Metaculus API requires authentication via API token.
+    // Set your token in Script Properties: key = METACULUS_API_TOKEN
+    const token = PropertiesService.getScriptProperties().getProperty('METACULUS_API_TOKEN');
+    if (!token) {
+      Logger.log('Metaculus: No API token set. Go to Project Settings → Script Properties and add METACULUS_API_TOKEN.');
+      return null;
+    }
     const url = `https://www.metaculus.com/api2/questions/${questionId}/`;
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (resp.getResponseCode() !== 200) return null;
+    const resp = UrlFetchApp.fetch(url, {
+      muteHttpExceptions: true,
+      headers: { 'Authorization': `Token ${token}` },
+    });
+    if (resp.getResponseCode() !== 200) {
+      Logger.log(`Metaculus API returned ${resp.getResponseCode()} for question ${questionId}`);
+      return null;
+    }
     const data = JSON.parse(resp.getContentText());
-    // Community prediction median
+    // Community prediction median (q2 = 50th percentile, 0-1 scale)
     const cp = data.community_prediction;
     if (cp && cp.full && cp.full.q2 !== undefined) {
       return Math.round(cp.full.q2 * 1000) / 10;
     }
-    // Fallback to aggregate forecasts
-    if (data.forecasts && data.forecasts.latest) {
-      return Math.round(data.forecasts.latest.center * 1000) / 10;
+    // Newer API format fallback
+    if (data.question && data.question.aggregations) {
+      const agg = data.question.aggregations.recency_weighted;
+      if (agg && agg.latest && agg.latest.centers) {
+        return Math.round(agg.latest.centers[0] * 1000) / 10;
+      }
     }
     return null;
   } catch (e) {
@@ -255,7 +278,10 @@ function backfillPolymarket(questionId, slugOrConditionId) {
     if (gammaResp.getResponseCode() === 200) {
       const gammaData = JSON.parse(gammaResp.getContentText());
       if (Array.isArray(gammaData) && gammaData.length > 0) {
-        tokenId = gammaData[0].clobTokenIds?.[0] || slugOrConditionId;
+        // clobTokenIds is a JSON-encoded string array: '["tokenId1","tokenId2"]'
+        let tokenIds = gammaData[0].clobTokenIds;
+        if (typeof tokenIds === 'string') tokenIds = JSON.parse(tokenIds);
+        tokenId = (Array.isArray(tokenIds) && tokenIds.length > 0) ? tokenIds[0] : slugOrConditionId;
       }
     }
 

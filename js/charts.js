@@ -164,7 +164,7 @@ const ChartRenderer = (() => {
     linksDiv.className = 'links';
     const links = [];
     if (question.platforms.manifold)
-      links.push(`<a href="https://manifold.markets/${question.platforms.manifold}" target="_blank">Manifold ↗</a>`);
+      links.push(`<a href="https://manifold.markets/browse?q=${encodeURIComponent(question.title)}" target="_blank">Manifold ↗</a>`);
     if (question.platforms.polymarket)
       links.push(`<a href="https://polymarket.com/event/${question.platforms.polymarket}" target="_blank">Polymarket ↗</a>`);
     if (question.platforms.kalshi)
