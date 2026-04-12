@@ -3,7 +3,6 @@
 // ──────────────────────────────────────────────
 
 const ChartRenderer = (() => {
-  const PLATFORMS = ['manifold', 'polymarket', 'kalshi', 'metaculus'];
 
   /** Build annotation objects for vertical dotted lines */
   function buildAnnotations(annotations) {
@@ -32,37 +31,53 @@ const ChartRenderer = (() => {
     return result;
   }
 
-  /** Build datasets for a single question (one line per platform) */
-  function buildDatasets(historyEntries) {
-    if (!historyEntries) return [];
-    // Group by platform
-    const byPlatform = {};
+  /**
+   * Build datasets from Markets + History.
+   * Each market entry gets its own line. Multiple markets on the same platform
+   * share a color but use different dash styles.
+   */
+  function buildDatasets(marketsForQuestion, historyEntries) {
+    if (!marketsForQuestion || !historyEntries) return [];
+
+    // Index history by slug for fast lookup
+    const bySlug = {};
     for (const entry of historyEntries) {
-      if (!byPlatform[entry.platform]) byPlatform[entry.platform] = [];
-      byPlatform[entry.platform].push({
-        x: entry.timestamp,
-        y: entry.probability,
-      });
+      const key = entry.slug || '';
+      if (!bySlug[key]) bySlug[key] = [];
+      bySlug[key].push({ x: entry.timestamp, y: entry.probability });
     }
 
-    return PLATFORMS
-      .filter((p) => byPlatform[p])
-      .map((p) => ({
-        label: CONFIG.PLATFORM_LABELS[p],
-        data: byPlatform[p],
-        borderColor: CONFIG.PLATFORM_COLORS[p],
-        backgroundColor: CONFIG.PLATFORM_COLORS[p] + '1a',
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHitRadius: 8,
-        tension: 0.25,
-        fill: false,
-      }));
+    // Track how many markets we've seen per platform (for dash style rotation)
+    const platformCount = {};
+
+    return marketsForQuestion
+      .filter((m) => bySlug[m.slug])
+      .map((m) => {
+        const pIdx = platformCount[m.platform] || 0;
+        platformCount[m.platform] = pIdx + 1;
+        const dash = CONFIG.LINE_DASHES[pIdx % CONFIG.LINE_DASHES.length];
+
+        return {
+          label: m.label,
+          data: bySlug[m.slug],
+          borderColor: CONFIG.PLATFORM_COLORS[m.platform] || '#888',
+          backgroundColor: (CONFIG.PLATFORM_COLORS[m.platform] || '#888') + '1a',
+          borderWidth: 2,
+          borderDash: dash,
+          pointRadius: 0,
+          pointHitRadius: 8,
+          tension: 0.25,
+          fill: false,
+          // Stash platform for link generation
+          _platform: m.platform,
+          _slug: m.slug,
+        };
+      });
   }
 
   /** Create a chart on a canvas element */
-  function createChart(canvas, question, historyEntries, annotations) {
-    const datasets = buildDatasets(historyEntries);
+  function createChart(canvas, marketsForQuestion, historyEntries, annotations) {
+    const datasets = buildDatasets(marketsForQuestion, historyEntries);
     const annotationObjects = buildAnnotations(annotations);
 
     return new Chart(canvas, {
@@ -86,13 +101,8 @@ const ChartRenderer = (() => {
                 month: 'MMM yyyy',
               },
             },
-            grid: {
-              color: 'rgba(48, 54, 61, 0.5)',
-            },
-            ticks: {
-              color: '#8b949e',
-              maxTicksLimit: 8,
-            },
+            grid: { color: 'rgba(48, 54, 61, 0.5)' },
+            ticks: { color: '#8b949e', maxTicksLimit: 8 },
           },
           y: {
             min: 0,
@@ -102,9 +112,7 @@ const ChartRenderer = (() => {
               callback: (v) => v + '%',
               stepSize: 25,
             },
-            grid: {
-              color: 'rgba(48, 54, 61, 0.5)',
-            },
+            grid: { color: 'rgba(48, 54, 61, 0.5)' },
           },
         },
         plugins: {
@@ -119,16 +127,26 @@ const ChartRenderer = (() => {
               label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
             },
           },
-          annotation: {
-            annotations: annotationObjects,
-          },
+          annotation: { annotations: annotationObjects },
         },
       },
     });
   }
 
+  /** Generate a link URL for a market */
+  function marketUrl(market) {
+    const slug = market.slug;
+    switch (market.platform) {
+      case 'manifold':   return `https://manifold.markets/browse?q=${encodeURIComponent(slug)}`;
+      case 'polymarket': return `https://polymarket.com/event/${slug}`;
+      case 'kalshi':     return `https://kalshi.com/markets/${slug}`;
+      case 'metaculus':  return `https://www.metaculus.com/questions/${slug}/`;
+      default:           return null;
+    }
+  }
+
   /** Build the full HTML card for a question and render its chart */
-  function renderQuestionCard(container, question, historyEntries, annotations) {
+  function renderQuestionCard(container, question, marketsForQuestion, historyEntries, annotations) {
     const card = document.createElement('div');
     card.className = 'chart-card';
 
@@ -137,15 +155,16 @@ const ChartRenderer = (() => {
     h3.textContent = question.title;
     card.appendChild(h3);
 
-    // Current probabilities
+    // Current probabilities — one tag per market
     const latestProbs = DataService.getLatestProbabilities(historyEntries);
     const probDiv = document.createElement('div');
     probDiv.className = 'current-prob';
     const probParts = [];
-    for (const p of PLATFORMS) {
-      if (latestProbs[p]) {
+    for (const m of (marketsForQuestion || [])) {
+      const latest = latestProbs[m.slug];
+      if (latest) {
         probParts.push(
-          `<span class="platform-tag ${p}">${CONFIG.PLATFORM_LABELS[p]}</span> <span>${latestProbs[p].probability.toFixed(1)}%</span>`
+          `<span class="platform-tag ${m.platform}">${m.label}</span> <span>${latest.probability.toFixed(1)}%</span>`
         );
       }
     }
@@ -159,25 +178,25 @@ const ChartRenderer = (() => {
     wrapper.appendChild(canvas);
     card.appendChild(wrapper);
 
-    // Platform links
+    // Market links — one per market entry
     const linksDiv = document.createElement('div');
     linksDiv.className = 'links';
-    const links = [];
-    if (question.platforms.manifold)
-      links.push(`<a href="https://manifold.markets/browse?q=${encodeURIComponent(question.title)}" target="_blank">Manifold ↗</a>`);
-    if (question.platforms.polymarket)
-      links.push(`<a href="https://polymarket.com/event/${question.platforms.polymarket}" target="_blank">Polymarket ↗</a>`);
-    if (question.platforms.kalshi)
-      links.push(`<a href="https://kalshi.com/markets/${question.platforms.kalshi}" target="_blank">Kalshi ↗</a>`);
-    if (question.platforms.metaculus)
-      links.push(`<a href="https://www.metaculus.com/questions/${question.platforms.metaculus}/" target="_blank">Metaculus ↗</a>`);
-    linksDiv.innerHTML = links.join('');
+    for (const m of (marketsForQuestion || [])) {
+      const url = marketUrl(m);
+      if (url) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.textContent = `${m.label} ↗`;
+        linksDiv.appendChild(a);
+      }
+    }
     card.appendChild(linksDiv);
 
     container.appendChild(card);
 
     // Render chart (after DOM insertion so canvas has dimensions)
-    createChart(canvas, question, historyEntries, annotations);
+    createChart(canvas, marketsForQuestion, historyEntries, annotations);
   }
 
   return { renderQuestionCard };

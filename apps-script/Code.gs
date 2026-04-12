@@ -7,40 +7,36 @@
 /** Main entry point — called by time trigger */
 function recordAllProbabilities() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const questionsSheet = ss.getSheetByName('Questions');
+  const marketsSheet = ss.getSheetByName('Markets');
   const historySheet = ss.getSheetByName('History');
 
-  if (!questionsSheet || !historySheet) {
-    Logger.log('ERROR: Missing Questions or History sheet');
+  if (!marketsSheet || !historySheet) {
+    Logger.log('ERROR: Missing Markets or History sheet');
     return;
   }
 
-  const questions = getQuestions(questionsSheet);
+  const markets = getMarkets(marketsSheet);
   const timestamp = new Date().toISOString();
   const newRows = [];
 
-  for (const q of questions) {
-    if (q.manifold_slug) {
-      const prob = fetchManifold(q.manifold_slug);
-      if (prob !== null) newRows.push([q.id, timestamp, 'manifold', prob]);
+  for (const m of markets) {
+    let prob = null;
+    switch (m.platform) {
+      case 'manifold':   prob = fetchManifold(m.slug); break;
+      case 'polymarket': prob = fetchPolymarket(m.slug); break;
+      case 'kalshi':     prob = fetchKalshi(m.slug); break;
+      case 'metaculus':  prob = fetchMetaculus(m.slug); break;
+      default:
+        Logger.log(`Unknown platform: ${m.platform}`);
     }
-    if (q.polymarket_slug) {
-      const prob = fetchPolymarket(q.polymarket_slug);
-      if (prob !== null) newRows.push([q.id, timestamp, 'polymarket', prob]);
-    }
-    if (q.kalshi_ticker) {
-      const prob = fetchKalshi(q.kalshi_ticker);
-      if (prob !== null) newRows.push([q.id, timestamp, 'kalshi', prob]);
-    }
-    if (q.metaculus_id) {
-      const prob = fetchMetaculus(q.metaculus_id);
-      if (prob !== null) newRows.push([q.id, timestamp, 'metaculus', prob]);
+    if (prob !== null) {
+      newRows.push([m.question_id, timestamp, m.platform, m.slug, prob]);
     }
   }
 
   if (newRows.length > 0) {
     historySheet
-      .getRange(historySheet.getLastRow() + 1, 1, newRows.length, 4)
+      .getRange(historySheet.getLastRow() + 1, 1, newRows.length, 5)
       .setValues(newRows);
     Logger.log(`Recorded ${newRows.length} data points`);
   } else {
@@ -50,25 +46,26 @@ function recordAllProbabilities() {
 
 // ── Sheet parsing ─────────────────────────────────────────────
 
-function getQuestions(sheet) {
+/** Read Markets tab: question_id, platform, slug, label */
+function getMarkets(sheet) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0].map((h) => h.toString().trim().toLowerCase());
-  const questions = [];
+  const markets = [];
 
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    const q = {};
-    headers.forEach((h, j) => (q[h] = row[j]?.toString().trim() || ''));
-    questions.push({
-      id: q['question_id'],
-      manifold_slug: q['manifold_slug'],
-      polymarket_slug: q['polymarket_slug'],
-      kalshi_ticker: q['kalshi_ticker'],
-      metaculus_id: q['metaculus_id'],
+    const r = {};
+    headers.forEach((h, j) => (r[h] = row[j]?.toString().trim() || ''));
+    if (!r['question_id'] || !r['platform'] || !r['slug']) continue;
+    markets.push({
+      question_id: r['question_id'],
+      platform: r['platform'].toLowerCase(),
+      slug: r['slug'],
+      label: r['label'] || '',
     });
   }
 
-  return questions.filter((q) => q.id);
+  return markets;
 }
 
 // ── Platform API fetchers ─────────────────────────────────────
@@ -196,63 +193,54 @@ function fetchMetaculus(questionId) {
 /**
  * Optional: Backfill historical data from platform APIs.
  * Run this once manually to seed your History tab with past data.
- * Only Manifold and Polymarket reliably provide history.
+ * Only Manifold and Polymarket reliably provide history via API.
  */
 function backfillHistory() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const questionsSheet = ss.getSheetByName('Questions');
+  const marketsSheet = ss.getSheetByName('Markets');
   const historySheet = ss.getSheetByName('History');
-  const questions = getQuestions(questionsSheet);
+  const markets = getMarkets(marketsSheet);
   let totalRows = 0;
 
-  for (const q of questions) {
-    // Manifold bet history → probability series
-    if (q.manifold_slug) {
-      const rows = backfillManifold(q.id, q.manifold_slug);
-      if (rows.length > 0) {
-        historySheet
-          .getRange(historySheet.getLastRow() + 1, 1, rows.length, 4)
-          .setValues(rows);
-        totalRows += rows.length;
-      }
+  for (const m of markets) {
+    let rows = [];
+    switch (m.platform) {
+      case 'manifold':
+        rows = backfillManifold(m.question_id, m.slug);
+        break;
+      case 'polymarket':
+        rows = backfillPolymarket(m.question_id, m.slug);
+        break;
     }
-
-    // Polymarket price history
-    if (q.polymarket_slug) {
-      const rows = backfillPolymarket(q.id, q.polymarket_slug);
-      if (rows.length > 0) {
-        historySheet
-          .getRange(historySheet.getLastRow() + 1, 1, rows.length, 4)
-          .setValues(rows);
-        totalRows += rows.length;
-      }
+    if (rows.length > 0) {
+      historySheet
+        .getRange(historySheet.getLastRow() + 1, 1, rows.length, 5)
+        .setValues(rows);
+      totalRows += rows.length;
     }
   }
 
   Logger.log(`Backfilled ${totalRows} total rows`);
 }
 
-function backfillManifold(questionId, slugOrId) {
+function backfillManifold(questionId, slug) {
   try {
-    // First get the market to find the contractId
-    const marketUrl = `https://api.manifold.markets/v0/slug/${slugOrId}`;
+    const marketUrl = `https://api.manifold.markets/v0/slug/${slug}`;
     const marketResp = UrlFetchApp.fetch(marketUrl, { muteHttpExceptions: true });
     if (marketResp.getResponseCode() !== 200) return [];
     const market = JSON.parse(marketResp.getContentText());
     const contractId = market.id;
 
-    // Fetch bet history (limited to 1000, paginate if needed)
     const betsUrl = `https://api.manifold.markets/v0/bets?contractId=${contractId}&limit=1000`;
     const betsResp = UrlFetchApp.fetch(betsUrl, { muteHttpExceptions: true });
     if (betsResp.getResponseCode() !== 200) return [];
     const bets = JSON.parse(betsResp.getContentText());
 
-    // Sample: take one point per day
+    // Sample: one point per day
     const byDay = {};
     for (const bet of bets) {
       if (bet.probAfter === undefined) continue;
       const day = new Date(bet.createdTime).toISOString().slice(0, 10);
-      // Keep latest bet of the day
       byDay[day] = {
         timestamp: new Date(bet.createdTime).toISOString(),
         probability: Math.round(bet.probAfter * 1000) / 10,
@@ -261,27 +249,25 @@ function backfillManifold(questionId, slugOrId) {
 
     return Object.values(byDay)
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-      .map((p) => [questionId, p.timestamp, 'manifold', p.probability]);
+      .map((p) => [questionId, p.timestamp, 'manifold', slug, p.probability]);
   } catch (e) {
-    Logger.log(`Manifold backfill error (${slugOrId}): ${e}`);
+    Logger.log(`Manifold backfill error (${slug}): ${e}`);
     return [];
   }
 }
 
-function backfillPolymarket(questionId, slugOrConditionId) {
+function backfillPolymarket(questionId, slug) {
   try {
-    // Try to get token_id from gamma API
-    const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slugOrConditionId)}`;
+    const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slug)}`;
     const gammaResp = UrlFetchApp.fetch(gammaUrl, { muteHttpExceptions: true });
-    let tokenId = slugOrConditionId; // fallback to using it directly
+    let tokenId = slug;
 
     if (gammaResp.getResponseCode() === 200) {
       const gammaData = JSON.parse(gammaResp.getContentText());
       if (Array.isArray(gammaData) && gammaData.length > 0) {
-        // clobTokenIds is a JSON-encoded string array: '["tokenId1","tokenId2"]'
         let tokenIds = gammaData[0].clobTokenIds;
         if (typeof tokenIds === 'string') tokenIds = JSON.parse(tokenIds);
-        tokenId = (Array.isArray(tokenIds) && tokenIds.length > 0) ? tokenIds[0] : slugOrConditionId;
+        tokenId = (Array.isArray(tokenIds) && tokenIds.length > 0) ? tokenIds[0] : slug;
       }
     }
 
@@ -297,10 +283,11 @@ function backfillPolymarket(questionId, slugOrConditionId) {
       questionId,
       new Date(point.t * 1000).toISOString(),
       'polymarket',
+      slug,
       Math.round(parseFloat(point.p) * 1000) / 10,
     ]);
   } catch (e) {
-    Logger.log(`Polymarket backfill error (${slugOrConditionId}): ${e}`);
+    Logger.log(`Polymarket backfill error (${slug}): ${e}`);
     return [];
   }
 }

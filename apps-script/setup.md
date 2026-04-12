@@ -6,27 +6,44 @@ Create a new Google Sheet with **3 tabs** (exact names matter):
 
 ### Tab: `Questions`
 
-| question_id | title | category | sort_order | manifold_slug | polymarket_slug | kalshi_ticker | metaculus_id |
-|---|---|---|---|---|---|---|---|
-| us-pres-2028 | Will a Democrat win the 2028 presidential election? | Politics | 1 | will-a-democrat-win-the-2028-us-pres | democrat-2028 | PRES-2028-DEM | 12345 |
-| ai-agi-2030 | Will AGI be achieved by 2030? | AI | 1 | will-agi-be-achieved-by-2030 | | | 3479 |
+| question_id | title | category | sort_order |
+|---|---|---|---|
+| us-pres-2028 | Will a Democrat win the 2028 presidential election? | Politics | 1 |
+| ai-agi-2030 | Will AGI be achieved by 2030? | AI | 1 |
 
 **Notes:**
 - `question_id`: A short unique identifier you choose (e.g., `us-pres-2028`)
-- `manifold_slug`: The slug from the Manifold URL. For `https://manifold.markets/JohnDoe/will-x-happen`, use `JohnDoe/will-x-happen`
-- `polymarket_slug`: The slug from the Polymarket URL, or the CLOB token ID
-- `kalshi_ticker`: The ticker from Kalshi (e.g., `PRES-2028-DEM`)
-- `metaculus_id`: The numeric question ID from the Metaculus URL
-- Leave cells **blank** for platforms that don't have the question
+- `sort_order`: Controls ordering within a category (lower = first)
+- This tab is just metadata — market links live in the Markets tab
+
+### Tab: `Markets`
+
+| question_id | platform | slug | label |
+|---|---|---|---|
+| ai-agi-2030 | manifold | will-we-get-agi-before-2030 | Manifold (RemNi) |
+| ai-agi-2030 | manifold | will-agi-arrive-by-2030 | Manifold (JohnDoe) |
+| ai-agi-2030 | polymarket | openai-announces-it-has-achieved-agi-before-2027 | Polymarket |
+| ai-agi-2030 | kalshi | KXAGICO-COMP-26Q2 | Kalshi Q2 2026 |
+| ai-agi-2030 | metaculus | 3479 | Metaculus |
+| us-pres-2028 | manifold | will-a-democrat-win-the-2028-us-pres | Manifold |
+| us-pres-2028 | kalshi | PRES-2028-DEM | Kalshi |
+
+**Notes:**
+- One row per market. A question can have **multiple markets per platform**!
+- `platform`: must be one of `manifold`, `polymarket`, `kalshi`, `metaculus`
+- `slug`: the identifier used to fetch the market from the platform's API
+- `label`: displayed in chart tooltips and below the chart. If blank, defaults to the platform name.
+  Use labels to distinguish multiple markets on the same platform (e.g., "Manifold (RemNi)")
 
 ### Tab: `History`
 
-| question_id | timestamp | platform | probability |
-|---|---|---|---|
-| us-pres-2028 | 2026-01-15T08:00:00Z | manifold | 52.3 |
-| us-pres-2028 | 2026-01-15T08:00:00Z | kalshi | 51.0 |
+| question_id | timestamp | platform | slug | probability |
+|---|---|---|---|---|
+| ai-agi-2030 | 2026-01-15T08:00:00Z | manifold | will-we-get-agi-before-2030 | 43.9 |
+| ai-agi-2030 | 2026-01-15T08:00:00Z | kalshi | KXAGICO-COMP-26Q2 | 8.0 |
 
-This tab will be **auto-populated** by the Apps Script. Just create the header row.
+This tab is **auto-populated** by the Apps Script. Just create the header row.
+The `slug` column links each data point back to a specific market.
 
 ### Tab: `Annotations`
 

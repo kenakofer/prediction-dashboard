@@ -8,7 +8,8 @@
   const containerEl = document.getElementById('categories-container');
 
   try {
-    const { questions, history, annotations, categories } = await DataService.loadAll();
+    const { questions, markets, history, annotations, categories } =
+      await DataService.loadAll();
 
     // Show last-updated timestamp from most recent history entry
     let latestTs = null;
@@ -22,13 +23,15 @@
         `Last updated: ${latestTs.toLocaleString()}`;
     }
 
-    // Platform legend
+    // Platform legend — show each platform that has at least one market
+    const usedPlatforms = new Set();
+    for (const marketList of Object.values(markets)) {
+      for (const m of marketList) usedPlatforms.add(m.platform);
+    }
     const legend = document.createElement('div');
     legend.className = 'platform-legend';
     for (const [key, label] of Object.entries(CONFIG.PLATFORM_LABELS)) {
-      // Only show platforms that have data
-      const hasData = questions.some((q) => q.platforms[key]);
-      if (!hasData) continue;
+      if (!usedPlatforms.has(key)) continue;
       legend.innerHTML += `
         <div class="legend-item">
           <span class="legend-dot" style="background:${CONFIG.PLATFORM_COLORS[key]}"></span>
@@ -55,6 +58,7 @@
         ChartRenderer.renderQuestionCard(
           grid,
           question,
+          markets[question.id] || [],
           history[question.id] || [],
           annotations[question.id] || []
         );

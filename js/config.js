@@ -10,6 +10,7 @@ const CONFIG = {
   // Tab names in your Google Sheet (must match exactly)
   TABS: {
     QUESTIONS: 'Questions',
+    MARKETS: 'Markets',
     HISTORY: 'History',
     ANNOTATIONS: 'Annotations',
   },
@@ -28,6 +29,14 @@ const CONFIG = {
     kalshi:     'Kalshi',
     metaculus:  'Metaculus',
   },
+
+  // Line styles to distinguish multiple markets on the same platform
+  LINE_DASHES: [
+    [],         // solid
+    [6, 3],     // dashed
+    [2, 2],     // dotted
+    [8, 3, 2, 3], // dash-dot
+  ],
 
   // Build a CSV URL for a given tab
   csvUrl(tabName) {

@@ -40,8 +40,9 @@ Google Sheet (private)          GitHub Pages (public)
 
 | Tab | Purpose |
 |-----|---------|
-| `Questions` | Master list: ID, title, category, platform identifiers |
-| `History` | Time-series data (auto-populated by Apps Script) |
+| `Questions` | Master list: ID, title, category, sort_order |
+| `Markets` | One row per market: question_id, platform, slug, label. Supports multiple markets per platform! |
+| `History` | Time-series data per market (auto-populated by Apps Script) |
 | `Annotations` | Manual date+note markers shown as vertical lines on charts |
 
 ## Supported Platforms
