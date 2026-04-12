@@ -25,7 +25,7 @@ function recordAllProbabilities() {
       case 'manifold':   prob = fetchManifold(m.slug); break;
       case 'polymarket': prob = fetchPolymarket(m.slug); break;
       case 'kalshi':     prob = fetchKalshi(m.slug); break;
-      case 'metaculus':  prob = fetchMetaculus(m.slug); break;
+      case 'metaculus':  prob = fetchMetaculus(m.slug, m.param); break;
       default:
         Logger.log(`Unknown platform: ${m.platform}`);
     }
@@ -46,7 +46,7 @@ function recordAllProbabilities() {
 
 // ── Sheet parsing ─────────────────────────────────────────────
 
-/** Read Markets tab: question_id, platform, slug, label */
+/** Read Markets tab: question_id, platform, slug, label, url, param */
 function getMarkets(sheet) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0].map((h) => h.toString().trim().toLowerCase());
@@ -63,6 +63,7 @@ function getMarkets(sheet) {
       slug: r['slug'],
       label: r['label'] || '',
       url: r['url'] || '',
+      param: r['param'] || '',  // e.g. "2030-01-01" for Metaculus date questions
     });
   }
 
@@ -151,41 +152,214 @@ function fetchKalshi(ticker) {
   }
 }
 
-function fetchMetaculus(questionId) {
+function fetchMetaculus(questionId, cutoffDate) {
   try {
-    // Metaculus API requires authentication via API token.
-    // Set your token in Script Properties: key = METACULUS_API_TOKEN
     const token = PropertiesService.getScriptProperties().getProperty('METACULUS_API_TOKEN');
     if (!token) {
-      Logger.log('Metaculus: No API token set. Go to Project Settings → Script Properties and add METACULUS_API_TOKEN.');
+      Logger.log('Metaculus: No API token set in Script Properties (METACULUS_API_TOKEN).');
       return null;
     }
-    const url = `https://www.metaculus.com/api2/questions/${questionId}/`;
-    const resp = UrlFetchApp.fetch(url, {
+
+    // Try v3 API first — it has the 201-point CDF needed for date questions
+    const v3url = `https://www.metaculus.com/api/questions/${questionId}/`;
+    const v3resp = UrlFetchApp.fetch(v3url, {
       muteHttpExceptions: true,
       headers: { 'Authorization': `Token ${token}` },
     });
-    if (resp.getResponseCode() !== 200) {
-      Logger.log(`Metaculus API returned ${resp.getResponseCode()} for question ${questionId}`);
-      return null;
-    }
-    const data = JSON.parse(resp.getContentText());
-    // Community prediction median (q2 = 50th percentile, 0-1 scale)
-    const cp = data.community_prediction;
-    if (cp && cp.full && cp.full.q2 !== undefined) {
-      return Math.round(cp.full.q2 * 1000) / 10;
-    }
-    // Newer API format fallback
-    if (data.question && data.question.aggregations) {
-      const agg = data.question.aggregations.recency_weighted;
-      if (agg && agg.latest && agg.latest.centers) {
+
+    if (v3resp.getResponseCode() === 200) {
+      const data = JSON.parse(v3resp.getContentText());
+      const q = data.question || data;
+      const agg = q.aggregations && q.aggregations.recency_weighted;
+
+      // Date question with a cutoff date: read CDF and compute P(date < cutoffDate)
+      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.forecaster_count !== undefined ? null : agg.latest.centers)) {
+        // centers[0] is the median for continuous; use CDF if available
+      }
+      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.histogram)) {
+        // CDF may be in 'histogram' field for v3 date questions
+        const result = calcCdfAtCutoff(q, agg.latest, cutoffDate);
+        if (result !== null) return result;
+      }
+
+      // Try direct CDF field (v3 format for continuous/date questions)
+      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.cdf)) {
+        const result = calcCdfAtCutoff(q, agg.latest, cutoffDate);
+        if (result !== null) return result;
+      }
+
+      // Binary question — return community median probability
+      if (agg && agg.latest && Array.isArray(agg.latest.centers)) {
         return Math.round(agg.latest.centers[0] * 1000) / 10;
       }
+    }
+
+    // Fall back to v2 API (works for binary questions)
+    const v2url = `https://www.metaculus.com/api2/questions/${questionId}/`;
+    const v2resp = UrlFetchApp.fetch(v2url, {
+      muteHttpExceptions: true,
+      headers: { 'Authorization': `Token ${token}` },
+    });
+    if (v2resp.getResponseCode() !== 200) {
+      Logger.log(`Metaculus API returned ${v2resp.getResponseCode()} for question ${questionId}`);
+      return null;
+    }
+    const v2data = JSON.parse(v2resp.getContentText());
+
+    // Date question with cutoff: use v2 community_prediction distribution
+    if (cutoffDate) {
+      const result = calcCdfAtCutoffV2(v2data, cutoffDate);
+      if (result !== null) return result;
+    }
+
+    // Binary: community prediction median
+    const cp = v2data.community_prediction;
+    if (cp && cp.full && cp.full.q2 !== undefined) {
+      return Math.round(cp.full.q2 * 1000) / 10;
     }
     return null;
   } catch (e) {
     Logger.log(`Metaculus error (${questionId}): ${e}`);
     return null;
+  }
+}
+
+/**
+ * Given a v3 aggregation object with a CDF array and question scale info,
+ * compute P(date < cutoffDate) as a 0-100 probability.
+ * The CDF is a 201-point array where cdf[i] = P(value <= min + i*(max-min)/200).
+ */
+function calcCdfAtCutoff(question, aggLatest, cutoffDate) {
+  try {
+    const cdf = aggLatest.cdf;
+    if (!Array.isArray(cdf) || cdf.length < 2) return null;
+
+    const scale = (question.possibilities && question.possibilities.scale) ||
+                  (question.scaling) || null;
+    if (!scale) return null;
+
+    const minVal = parseMetaculusScaleDate(scale.min || scale.range_min);
+    const maxVal = parseMetaculusScaleDate(scale.max || scale.range_max);
+    if (minVal === null || maxVal === null) return null;
+
+    const targetVal = new Date(cutoffDate).getTime() / 1000; // seconds
+    if (targetVal <= minVal) return 0;
+    if (targetVal >= maxVal) return 100;
+
+    // CDF has N points uniformly spanning [min, max]
+    const n = cdf.length;
+    const fraction = (targetVal - minVal) / (maxVal - minVal);
+    const idx = fraction * (n - 1);
+    const lo = Math.floor(idx);
+    const hi = Math.min(lo + 1, n - 1);
+    const interp = cdf[lo] + (cdf[hi] - cdf[lo]) * (idx - lo);
+    return Math.round(interp * 1000) / 10;
+  } catch (e) {
+    Logger.log(`calcCdfAtCutoff error: ${e}`);
+    return null;
+  }
+}
+
+/**
+ * V2 API fallback: use the histogram + scale from community_prediction.
+ */
+function calcCdfAtCutoffV2(data, cutoffDate) {
+  try {
+    const cp = data.community_prediction;
+    if (!cp || !cp.full) return null;
+    const histogram = cp.full.histogram;
+    if (!Array.isArray(histogram) || histogram.length < 2) return null;
+
+    const scale = data.possibilities && data.possibilities.scale;
+    if (!scale) return null;
+
+    const minVal = parseMetaculusScaleDate(scale.min);
+    const maxVal = parseMetaculusScaleDate(scale.max);
+    if (minVal === null || maxVal === null) return null;
+
+    const targetVal = new Date(cutoffDate).getTime() / 1000;
+    if (targetVal <= minVal) return 0;
+    if (targetVal >= maxVal) return 100;
+
+    const deriv = scale.deriv_ratio || 1;
+    const a = (targetVal - minVal) / (maxVal - minVal);
+    let scaled;
+    if (Math.abs(deriv - 1) < 0.001) {
+      scaled = a;
+    } else {
+      scaled = Math.log(a * (deriv - 1) + 1) / Math.log(deriv);
+    }
+
+    const n = histogram.length;
+    const binIdx = Math.min(Math.floor(scaled * n), n - 1);
+    let total = 0, cumulative = 0;
+    for (let i = 0; i < n; i++) {
+      total += histogram[i];
+      if (i <= binIdx) cumulative += histogram[i];
+    }
+    if (total === 0) return null;
+    return Math.round(cumulative / total * 1000) / 10;
+  } catch (e) {
+    Logger.log(`calcCdfAtCutoffV2 error: ${e}`);
+    return null;
+  }
+}
+
+/** Parse a Metaculus scale date — could be ISO string, Unix seconds, or YYYYMMDD integer */
+function parseMetaculusScaleDate(val) {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') {
+    // If it looks like YYYYMMDD (8 digits), convert to timestamp
+    if (val > 19000000 && val < 21000000) {
+      const s = val.toString();
+      return new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`).getTime() / 1000;
+    }
+    return val; // assume already Unix seconds
+  }
+  if (typeof val === 'string') {
+    return new Date(val).getTime() / 1000;
+  }
+  return null;
+}
+
+/** Debug helper: run this manually to inspect the raw API response for a question */
+function logMetaculusQuestionFormat() {
+  const questionId = 3479;
+  const token = PropertiesService.getScriptProperties().getProperty('METACULUS_API_TOKEN');
+  if (!token) { Logger.log('No token set'); return; }
+
+  const v3resp = UrlFetchApp.fetch(`https://www.metaculus.com/api/questions/${questionId}/`, {
+    muteHttpExceptions: true, headers: { 'Authorization': `Token ${token}` },
+  });
+  Logger.log(`v3 status: ${v3resp.getResponseCode()}`);
+  if (v3resp.getResponseCode() === 200) {
+    const d = JSON.parse(v3resp.getContentText());
+    const q = d.question || d;
+    Logger.log(`possibilities: ${JSON.stringify(q.possibilities || q.scaling || 'none')}`);
+    const agg = q.aggregations && q.aggregations.recency_weighted && q.aggregations.recency_weighted.latest;
+    if (agg) {
+      Logger.log(`agg keys: ${Object.keys(agg)}`);
+      if (agg.cdf) Logger.log(`cdf length: ${agg.cdf.length}, first: ${agg.cdf[0]}, last: ${agg.cdf[agg.cdf.length-1]}`);
+      if (agg.histogram) Logger.log(`histogram length: ${agg.histogram.length}`);
+    } else {
+      Logger.log('no recency_weighted.latest found');
+    }
+  }
+
+  const v2resp = UrlFetchApp.fetch(`https://www.metaculus.com/api2/questions/${questionId}/`, {
+    muteHttpExceptions: true, headers: { 'Authorization': `Token ${token}` },
+  });
+  Logger.log(`v2 status: ${v2resp.getResponseCode()}`);
+  if (v2resp.getResponseCode() === 200) {
+    const d = JSON.parse(v2resp.getContentText());
+    Logger.log(`possibilities.type: ${d.possibilities && d.possibilities.type}`);
+    Logger.log(`possibilities.scale: ${JSON.stringify(d.possibilities && d.possibilities.scale)}`);
+    const cp = d.community_prediction && d.community_prediction.full;
+    if (cp) {
+      Logger.log(`cp keys: ${Object.keys(cp)}`);
+      if (cp.histogram) Logger.log(`v2 histogram length: ${cp.histogram.length}`);
+      Logger.log(`q1/q2/q3: ${cp.q1} / ${cp.q2} / ${cp.q3}`);
+    }
   }
 }
 
@@ -438,6 +612,17 @@ function handleAction(body) {
         }
       }
       return jsonResponse({ success: true, deleted });
+    }
+
+    case 'write_cells': {
+      if (!body.range) return jsonResponse({ error: 'Missing range' }, 400);
+      const r = sheet.getRange(body.range);
+      if (Array.isArray(body.values) && Array.isArray(body.values[0])) {
+        r.setValues(body.values);
+      } else {
+        r.setValue(body.values);
+      }
+      return jsonResponse({ success: true });
     }
 
     default:
