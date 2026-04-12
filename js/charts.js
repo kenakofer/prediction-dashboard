@@ -135,11 +135,14 @@ const ChartRenderer = (() => {
 
   /** Generate a link URL for a market */
   function marketUrl(market) {
+    // Use explicit URL from the Markets sheet if provided
+    if (market.url) return market.url;
+    // Auto-generate fallback
     const slug = market.slug;
     switch (market.platform) {
       case 'manifold':   return `https://manifold.markets/browse?q=${encodeURIComponent(slug)}`;
       case 'polymarket': return `https://polymarket.com/event/${slug}`;
-      case 'kalshi':     return `https://kalshi.com/markets/${slug}`;
+      case 'kalshi':     return `https://kalshi.com/browse?query=${encodeURIComponent(slug)}`;
       case 'metaculus':  return `https://www.metaculus.com/questions/${slug}/`;
       default:           return null;
     }

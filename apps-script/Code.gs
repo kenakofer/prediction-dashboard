@@ -62,6 +62,7 @@ function getMarkets(sheet) {
       platform: r['platform'].toLowerCase(),
       slug: r['slug'],
       label: r['label'] || '',
+      url: r['url'] || '',
     });
   }
 

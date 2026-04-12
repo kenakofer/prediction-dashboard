@@ -25,7 +25,7 @@ const DataService = (() => {
     })).filter((q) => q.id);
   }
 
-  /** Parse Markets tab: question_id, platform, slug, label */
+  /** Parse Markets tab: question_id, platform, slug, label, url (optional) */
   function parseMarkets(rows) {
     const map = {};
     for (const r of rows) {
@@ -39,6 +39,7 @@ const DataService = (() => {
         platform,
         slug,
         label: r.label?.trim() || CONFIG.PLATFORM_LABELS[platform] || platform,
+        url: r.url?.trim() || '',
       });
     }
     return map;
