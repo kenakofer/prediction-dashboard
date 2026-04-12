@@ -17,7 +17,7 @@ const DataService = (() => {
 
   // ── Questions (Graphs) ─────────────────────────
 
-  /** Parse Questions tab: question_id, title, category, sort_order, chart_type, unit */
+  /** Parse Questions tab: question_id, title, category, sort_order, chart_type, unit, param */
   function parseQuestions(rows) {
     return rows.map((r) => ({
       id: r.question_id?.trim(),
@@ -26,6 +26,7 @@ const DataService = (() => {
       sortOrder: parseInt(r.sort_order, 10) || 999,
       chartType: r.chart_type?.trim() || 'probability',
       unit: r.unit?.trim() || '%',
+      param: r.param?.trim() || '',
     })).filter((q) => q.id);
   }
 

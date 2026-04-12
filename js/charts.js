@@ -151,7 +151,18 @@ const ChartRenderer = (() => {
 
   // ── Chart type: percent_change ─────────────────
 
-  const WINDOW_DAYS = { '1Y': 365, '2Y': 730, '5Y': 1825 };
+  const DEFAULT_WINDOWS = [12, 24, 60]; // months
+
+  function monthLabel(m) {
+    if (m % 12 === 0) return `${m / 12}Y`;
+    return `${m}M`;
+  }
+
+  function parseWindows(param) {
+    if (!param) return DEFAULT_WINDOWS;
+    const parsed = param.split(',').map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+    return parsed.length > 0 ? parsed : DEFAULT_WINDOWS;
+  }
 
   function toPercentChange(points, days) {
     const cutoff = new Date();
@@ -182,9 +193,11 @@ const ChartRenderer = (() => {
   }
 
   function renderPercentChange(canvas, graph, sources, graphData) {
+    const windows = parseWindows(graph.param);
+    const defaultDays = Math.round(windows[0] * 30.44);
     return new Chart(canvas, {
       type: 'line',
-      data: { datasets: buildPctDatasets(sources, graphData, WINDOW_DAYS['1Y']) },
+      data: { datasets: buildPctDatasets(sources, graphData, defaultDays) },
       options: {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
@@ -413,16 +426,18 @@ const ChartRenderer = (() => {
 
     // Time window toggle for percent_change charts
     let toggleDiv = null;
+    let windowMonths = null;
     if (graph.chartType === 'percent_change') {
+      windowMonths = parseWindows(graph.param);
       toggleDiv = document.createElement('div');
       toggleDiv.className = 'window-toggle';
-      for (const key of Object.keys(WINDOW_DAYS)) {
+      windowMonths.forEach((m, i) => {
         const btn = document.createElement('button');
-        btn.textContent = key;
-        btn.className = 'window-btn' + (key === '1Y' ? ' active' : '');
-        btn.dataset.window = key;
+        btn.textContent = monthLabel(m);
+        btn.className = 'window-btn' + (i === 0 ? ' active' : '');
+        btn.dataset.months = m;
         toggleDiv.appendChild(btn);
-      }
+      });
       card.appendChild(toggleDiv);
     }
 
@@ -463,7 +478,7 @@ const ChartRenderer = (() => {
         const btn = e.target.closest('.window-btn');
         if (!btn) return;
         toggleDiv.querySelectorAll('.window-btn').forEach(b => b.classList.toggle('active', b === btn));
-        const days = WINDOW_DAYS[btn.dataset.window];
+        const days = Math.round(parseInt(btn.dataset.months, 10) * 30.44);
         chart.data.datasets = buildPctDatasets(sources, graphData || {}, days);
         chart.update();
       });
