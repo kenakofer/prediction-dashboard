@@ -336,6 +336,7 @@ function logMetaculusQuestionFormat() {
   const token = PropertiesService.getScriptProperties().getProperty('METACULUS_API_TOKEN');
   if (!token) { Logger.log('No token set'); return; }
 
+  // Try v3 with auth
   const v3resp = UrlFetchApp.fetch(`https://www.metaculus.com/api/questions/${questionId}/`, {
     muteHttpExceptions: true, headers: { 'Authorization': `Token ${token}` },
   });
@@ -352,8 +353,11 @@ function logMetaculusQuestionFormat() {
     } else {
       Logger.log('no recency_weighted.latest found');
     }
+  } else {
+    Logger.log(`v3 error body: ${v3resp.getContentText().slice(0, 500)}`);
   }
 
+  // Try v2 with auth
   const v2resp = UrlFetchApp.fetch(`https://www.metaculus.com/api2/questions/${questionId}/`, {
     muteHttpExceptions: true, headers: { 'Authorization': `Token ${token}` },
   });
@@ -368,6 +372,17 @@ function logMetaculusQuestionFormat() {
       if (cp.histogram) Logger.log(`v2 histogram length: ${cp.histogram.length}`);
       Logger.log(`q1/q2/q3: ${cp.q1} / ${cp.q2} / ${cp.q3}`);
     }
+  } else {
+    Logger.log(`v2 error body: ${v2resp.getContentText().slice(0, 500)}`);
+  }
+
+  // Try v2 without auth (to check if the question is publicly accessible)
+  const v2pubResp = UrlFetchApp.fetch(`https://www.metaculus.com/api2/questions/${questionId}/`, {
+    muteHttpExceptions: true,
+  });
+  Logger.log(`v2 no-auth status: ${v2pubResp.getResponseCode()}`);
+  if (v2pubResp.getResponseCode() !== 200) {
+    Logger.log(`v2 no-auth body: ${v2pubResp.getContentText().slice(0, 300)}`);
   }
 }
 
