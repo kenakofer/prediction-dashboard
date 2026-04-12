@@ -168,7 +168,7 @@ function fetchMetaculus(questionId, cutoffDate) {
       return null;
     }
 
-    // Try v3 API first — it has the 201-point CDF needed for date questions
+    // v3 API — possibilities.continuous_range is the 201-point quantile (inverse CDF)
     const v3url = `https://www.metaculus.com/api/questions/${questionId}/`;
     const v3resp = UrlFetchApp.fetch(v3url, {
       muteHttpExceptions: true,
@@ -178,31 +178,27 @@ function fetchMetaculus(questionId, cutoffDate) {
     if (v3resp.getResponseCode() === 200) {
       const data = JSON.parse(v3resp.getContentText());
       const q = data.question || data;
+
+      // Date question with cutoff: use continuous_range quantile array
+      if (cutoffDate && q.possibilities && Array.isArray(q.possibilities.continuous_range)) {
+        const result = calcProbFromQuantiles(q.possibilities.continuous_range, cutoffDate);
+        if (result !== null) return result;
+      }
+
+      // Binary question via recency_weighted aggregation
       const agg = q.aggregations && q.aggregations.recency_weighted;
-
-      // Date question with a cutoff date: read CDF and compute P(date < cutoffDate)
-      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.forecaster_count !== undefined ? null : agg.latest.centers)) {
-        // centers[0] is the median for continuous; use CDF if available
-      }
-      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.histogram)) {
-        // CDF may be in 'histogram' field for v3 date questions
-        const result = calcCdfAtCutoff(q, agg.latest, cutoffDate);
-        if (result !== null) return result;
-      }
-
-      // Try direct CDF field (v3 format for continuous/date questions)
-      if (cutoffDate && agg && agg.latest && Array.isArray(agg.latest.cdf)) {
-        const result = calcCdfAtCutoff(q, agg.latest, cutoffDate);
-        if (result !== null) return result;
-      }
-
-      // Binary question — return community median probability
-      if (agg && agg.latest && Array.isArray(agg.latest.centers)) {
-        return Math.round(agg.latest.centers[0] * 1000) / 10;
+      if (agg && agg.latest) {
+        if (cutoffDate && Array.isArray(agg.latest.cdf)) {
+          const result = calcCdfAtCutoff(q, agg.latest, cutoffDate);
+          if (result !== null) return result;
+        }
+        if (Array.isArray(agg.latest.centers) && agg.latest.centers.length > 0) {
+          return Math.round(agg.latest.centers[0] * 1000) / 10;
+        }
       }
     }
 
-    // Fall back to v2 API (works for binary questions)
+    // Fall back to v2 API
     const v2url = `https://www.metaculus.com/api2/questions/${questionId}/`;
     const v2resp = UrlFetchApp.fetch(v2url, {
       muteHttpExceptions: true,
@@ -214,13 +210,11 @@ function fetchMetaculus(questionId, cutoffDate) {
     }
     const v2data = JSON.parse(v2resp.getContentText());
 
-    // Date question with cutoff: use v2 community_prediction distribution
     if (cutoffDate) {
       const result = calcCdfAtCutoffV2(v2data, cutoffDate);
       if (result !== null) return result;
     }
 
-    // Binary: community prediction median
     const cp = v2data.community_prediction;
     if (cp && cp.full && cp.full.q2 !== undefined) {
       return Math.round(cp.full.q2 * 1000) / 10;
@@ -228,6 +222,40 @@ function fetchMetaculus(questionId, cutoffDate) {
     return null;
   } catch (e) {
     Logger.log(`Metaculus error (${questionId}): ${e}`);
+    return null;
+  }
+}
+
+/**
+ * Given a 201-point quantile array (inverse CDF) of ISO date strings from v3 API
+ * (possibilities.continuous_range), compute P(date < cutoffDate) as a 0-100 probability.
+ * quantiles[i] = the date x such that P(forecast_date <= x) = i/200.
+ */
+function calcProbFromQuantiles(quantiles, cutoffDate) {
+  try {
+    const n = quantiles.length;
+    if (n < 2) return null;
+
+    const target = new Date(cutoffDate).getTime();
+    const timestamps = quantiles.map(d => new Date(d).getTime());
+
+    if (target <= timestamps[0]) return 0;
+    if (target >= timestamps[n - 1]) return 100;
+
+    // Binary search for the surrounding quantile points
+    let lo = 0, hi = n - 1;
+    while (lo < hi - 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (timestamps[mid] <= target) lo = mid;
+      else hi = mid;
+    }
+
+    // Interpolate: prob at lo is lo/(n-1), at hi is hi/(n-1)
+    const frac = (target - timestamps[lo]) / (timestamps[hi] - timestamps[lo]);
+    const prob = (lo + frac) / (n - 1);
+    return Math.round(prob * 1000) / 10;
+  } catch (e) {
+    Logger.log(`calcProbFromQuantiles error: ${e}`);
     return null;
   }
 }
@@ -335,7 +363,7 @@ function logMetaculusQuestionFormat() {
   const questionId = 3479;
   const token = PropertiesService.getScriptProperties().getProperty('METACULUS_API_TOKEN');
   if (!token) { Logger.log('No token set'); return; }
-
+  Logger.log(`Token stored (first 6 chars): ${token.slice(0, 6)}... length=${token.length}`);
   // Try v3 with auth
   const v3resp = UrlFetchApp.fetch(`https://www.metaculus.com/api/questions/${questionId}/`, {
     muteHttpExceptions: true, headers: { 'Authorization': `Token ${token}` },
@@ -344,7 +372,13 @@ function logMetaculusQuestionFormat() {
   if (v3resp.getResponseCode() === 200) {
     const d = JSON.parse(v3resp.getContentText());
     const q = d.question || d;
-    Logger.log(`possibilities: ${JSON.stringify(q.possibilities || q.scaling || 'none')}`);
+    const cr = q.possibilities && q.possibilities.continuous_range;
+    Logger.log(`continuous_range present: ${!!cr}, length: ${cr ? cr.length : 0}`);
+    if (cr && cr.length > 0) {
+      Logger.log(`quantile[0]: ${cr[0]}, quantile[100]: ${cr[100]}, quantile[200]: ${cr[200]}`);
+      const prob2030 = calcProbFromQuantiles(cr, '2030-01-01');
+      Logger.log(`P(AGI before 2030): ${prob2030}%`);
+    }
     const agg = q.aggregations && q.aggregations.recency_weighted && q.aggregations.recency_weighted.latest;
     if (agg) {
       Logger.log(`agg keys: ${Object.keys(agg)}`);
