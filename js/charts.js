@@ -23,8 +23,10 @@ const ChartRenderer = (() => {
           backgroundColor: 'rgba(22, 27, 34, 0.9)',
           color: '#8b949e',
           font: { size: 10 },
-          padding: 4,
+          padding: { x: 4, y: 3 },
           borderRadius: 4,
+          rotation: -90,
+          xAdjust: -10,
         },
       };
     });
