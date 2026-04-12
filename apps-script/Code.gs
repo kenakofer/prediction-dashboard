@@ -575,7 +575,7 @@ function backfillPolymarket(questionId, slug) {
 
 // ── Stock price tracking ──────────────────────────────────────
 
-const PRICE_SYMBOLS = ['GRMN', '^GSPC', 'CL=F'];
+const PRICE_SYMBOLS = ['BTC-USD', 'ETH-USD', 'GRMN', '^GSPC', 'CL=F'];
 
 /** Fetch daily closes from Yahoo Finance. rangeDays controls how far back. */
 function fetchYahooHistory(symbol, rangeDays) {

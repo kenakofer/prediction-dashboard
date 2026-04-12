@@ -4,34 +4,25 @@
 
 const TickerService = (() => {
   const COLORS = {
-    bitcoin:  '#f7931a',
-    ethereum: '#627eea',
-    GRMN:     '#00c7b1',
-    '^GSPC':  '#22c55e',
-    'CL=F':   '#f97316',
+    'BTC-USD':  '#f7931a',
+    'ETH-USD':  '#627eea',
+    GRMN:       '#00c7b1',
+    '^GSPC':    '#22c55e',
+    'CL=F':     '#f97316',
   };
 
   const LABELS = {
-    bitcoin:  'Bitcoin',
-    ethereum: 'Ethereum',
-    GRMN:     'Garmin (GRMN)',
-    '^GSPC':  'S&P 500',
-    'CL=F':   'WTI Crude Oil',
+    'BTC-USD':  'Bitcoin',
+    'ETH-USD':  'Ethereum',
+    GRMN:       'Garmin (GRMN)',
+    '^GSPC':    'S&P 500',
+    'CL=F':     'WTI Crude Oil',
   };
 
   const WINDOW_DAYS = { '1Y': 365, '2Y': 730, '5Y': 1825 };
 
-  /** Fetch 5Y of price history from CoinGecko (CORS-friendly, no API key needed). */
-  async function fetchCoinGecko(coinId) {
-    const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=1825`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`CoinGecko ${coinId}: HTTP ${resp.status}`);
-    const data = await resp.json();
-    return data.prices.map(([ts, price]) => ({ date: new Date(ts), price }));
-  }
-
   /** Fetch the Prices sheet CSV (written by Apps Script from Yahoo Finance). */
-  async function fetchStockHistory() {
+  async function fetchAllPrices() {
     const url = CONFIG.csvUrl('PRICES');
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`Prices CSV: HTTP ${resp.status}`);
@@ -56,7 +47,7 @@ const TickerService = (() => {
     return bySymbol;
   }
 
-  return { COLORS, LABELS, WINDOW_DAYS, fetchCoinGecko, fetchStockHistory };
+  return { COLORS, LABELS, WINDOW_DAYS, fetchAllPrices };
 })();
 
 const TickerRenderer = (() => {
@@ -190,11 +181,7 @@ const TickerRenderer = (() => {
 /** Initialise both ticker sections and append them to the given container. */
 async function initTickers(container) {
   try {
-    const [btcData, ethData, stockData] = await Promise.all([
-      TickerService.fetchCoinGecko('bitcoin'),
-      TickerService.fetchCoinGecko('ethereum'),
-      TickerService.fetchStockHistory(),
-    ]);
+    const priceData = await TickerService.fetchAllPrices();
 
     const section = document.createElement('section');
     section.className = 'category-section';
@@ -206,14 +193,17 @@ async function initTickers(container) {
     const grid = document.createElement('div');
     grid.className = 'chart-grid';
 
-    TickerRenderer.renderTickerCard(grid, 'Crypto', [
-      { id: 'bitcoin',  data: btcData },
-      { id: 'ethereum', data: ethData },
-    ]);
+    const cryptoSeries = ['BTC-USD', 'ETH-USD']
+      .filter(sym => priceData[sym]?.length > 0)
+      .map(sym => ({ id: sym, data: priceData[sym] }));
+
+    if (cryptoSeries.length > 0) {
+      TickerRenderer.renderTickerCard(grid, 'Crypto', cryptoSeries);
+    }
 
     const stockSeries = ['^GSPC', 'CL=F', 'GRMN']
-      .filter(sym => stockData[sym]?.length > 0)
-      .map(sym => ({ id: sym, data: stockData[sym] }));
+      .filter(sym => priceData[sym]?.length > 0)
+      .map(sym => ({ id: sym, data: priceData[sym] }));
 
     if (stockSeries.length > 0) {
       TickerRenderer.renderTickerCard(grid, 'Stocks & Commodities', stockSeries);

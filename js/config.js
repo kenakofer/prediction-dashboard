@@ -13,7 +13,7 @@ const CONFIG = {
     MARKETS:     121572886,
     HISTORY:     21183126,
     ANNOTATIONS: 1666890327,
-    PRICES:      null, // set after Prices sheet is created in Apps Script
+    PRICES:      451971888,
   },
 
   // Platform display colors (match CSS variables)
