@@ -179,9 +179,10 @@ function fetchMetaculus(questionId, cutoffDate) {
       const data = JSON.parse(v3resp.getContentText());
       const q = data.question || data;
 
-      // Date question with cutoff: use continuous_range quantile array
-      if (cutoffDate && q.possibilities && Array.isArray(q.possibilities.continuous_range)) {
-        const result = calcProbFromQuantiles(q.possibilities.continuous_range, cutoffDate);
+      // Date question with cutoff: use continuous_range quantile array (in scaling or possibilities)
+      const scaleInfo = q.scaling || q.possibilities;
+      if (cutoffDate && scaleInfo && Array.isArray(scaleInfo.continuous_range)) {
+        const result = calcProbFromQuantiles(scaleInfo.continuous_range, cutoffDate);
         if (result !== null) return result;
       }
 
@@ -371,8 +372,13 @@ function logMetaculusQuestionFormat() {
   Logger.log(`v3 status: ${v3resp.getResponseCode()}`);
   if (v3resp.getResponseCode() === 200) {
     const d = JSON.parse(v3resp.getContentText());
+    Logger.log(`top-level keys: ${Object.keys(d)}`);
     const q = d.question || d;
-    const cr = q.possibilities && q.possibilities.continuous_range;
+    Logger.log(`q keys: ${Object.keys(q).slice(0, 20)}`);
+    Logger.log(`q.possibilities: ${JSON.stringify(q.possibilities).slice(0, 100)}`);
+    Logger.log(`q.scaling: ${JSON.stringify(q.scaling).slice(0, 200)}`);
+    const scaleInfo = q.scaling || q.possibilities;
+    const cr = scaleInfo && scaleInfo.continuous_range;
     Logger.log(`continuous_range present: ${!!cr}, length: ${cr ? cr.length : 0}`);
     if (cr && cr.length > 0) {
       Logger.log(`quantile[0]: ${cr[0]}, quantile[100]: ${cr[100]}, quantile[200]: ${cr[200]}`);
