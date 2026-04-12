@@ -14,7 +14,7 @@ const CONFIG = {
     HISTORY:     21183126,
     ANNOTATIONS: 1666890327,
     PRICES:      451971888,
-    INDICATORS:  null, // set after Indicators sheet is created in Apps Script
+    INDICATORS:  149061804,
   },
 
   // Platform display colors (match CSS variables)

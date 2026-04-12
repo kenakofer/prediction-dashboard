@@ -27,47 +27,21 @@ const IndicatorService = (() => {
     return bySeries;
   }
 
-  /** Fetch METR time horizon data (embedded JSON in their page). */
-  async function fetchMETR() {
-    // We use a CORS proxy or direct fetch — metr.org allows cross-origin
-    try {
-      const resp = await fetch('https://metr.org/time-horizons/');
-      if (!resp.ok) throw new Error(`METR: HTTP ${resp.status}`);
-      const html = await resp.text();
-
-      // Extract the v1.1 benchmark data (the latest version)
-      const match = html.match(/const\s+benchmarkDataV1_1\s*=\s*(\{[\s\S]*?\});/);
-      if (!match) {
-        // Fallback to v1.0
-        const match1 = html.match(/const\s+benchmarkDataV1\s*=\s*(\{[\s\S]*?\});/);
-        if (!match1) throw new Error('Could not find METR benchmark data in page');
-        return parseMETRData(JSON.parse(match1[1]));
-      }
-      return parseMETRData(JSON.parse(match[1]));
-    } catch (e) {
-      console.warn('METR fetch failed (CORS?), trying fallback:', e.message);
-      return null;
-    }
-  }
-
-  function parseMETRData(benchmarkData) {
-    const results = benchmarkData.results || {};
+  /** Parse METR entries from the indicators data (series names start with "METR:"). */
+  function parseMETRFromIndicators(indicatorData) {
     const points = [];
-    for (const [key, model] of Object.entries(results)) {
-      const metrics = model.metrics || {};
-      const p50 = metrics.p50_horizon_length?.estimate;
-      const releaseDate = model.release_date;
-      if (p50 == null || !releaseDate) continue;
-      // Clean up model name
-      let name = key.replace(/_inspect$/, '').replace(/_/g, ' ');
-      name = name.replace(/\b\w/g, c => c.toUpperCase());
-      points.push({ date: new Date(releaseDate), hours: p50, name });
+    for (const [series, data] of Object.entries(indicatorData)) {
+      if (!series.startsWith('METR:')) continue;
+      const name = series.substring(5); // strip "METR:"
+      for (const p of data) {
+        points.push({ date: p.date, hours: p.value, name });
+      }
     }
     points.sort((a, b) => a.date - b.date);
     return points;
   }
 
-  return { fetchIndicators, fetchMETR };
+  return { fetchIndicators, parseMETRFromIndicators };
 })();
 
 const IndicatorRenderer = (() => {
@@ -282,48 +256,47 @@ const IndicatorRenderer = (() => {
 
 /** Initialize indicators section. */
 async function initIndicators(container) {
-  const results = await Promise.allSettled([
-    IndicatorService.fetchIndicators(),
-    IndicatorService.fetchMETR(),
-  ]);
+  try {
+    const indicatorData = await IndicatorService.fetchIndicators();
+    const metrData = IndicatorService.parseMETRFromIndicators(indicatorData);
 
-  const indicatorData = results[0].status === 'fulfilled' ? results[0].value : {};
-  const metrData = results[1].status === 'fulfilled' ? results[1].value : null;
+    const hasGas = ['Gas-Regular', 'Gas-Premium', 'Gas-Diesel'].some(k => indicatorData[k]?.length > 0);
+    const hasCPI = indicatorData['CPI']?.length > 0;
+    const hasMETR = metrData.length > 0;
 
-  const hasGas = ['Gas-Regular', 'Gas-Premium', 'Gas-Diesel'].some(k => indicatorData[k]?.length > 0);
-  const hasCPI = indicatorData['CPI']?.length > 0;
-  const hasMETR = metrData && metrData.length > 0;
+    if (!hasGas && !hasCPI && !hasMETR) return;
 
-  if (!hasGas && !hasCPI && !hasMETR) return;
+    const section = document.createElement('section');
+    section.className = 'category-section';
+    const h2 = document.createElement('h2');
+    h2.className = 'category-title';
+    h2.textContent = 'Economic & AI Indicators';
+    section.appendChild(h2);
 
-  const section = document.createElement('section');
-  section.className = 'category-section';
-  const h2 = document.createElement('h2');
-  h2.className = 'category-title';
-  h2.textContent = 'Economic & AI Indicators';
-  section.appendChild(h2);
+    const grid = document.createElement('div');
+    grid.className = 'chart-grid';
 
-  const grid = document.createElement('div');
-  grid.className = 'chart-grid';
+    if (hasGas) {
+      IndicatorRenderer.renderCard(grid, 'US Gas Prices ($/gal)', canvas => {
+        IndicatorRenderer.createGasChart(canvas, indicatorData);
+      });
+    }
 
-  if (hasGas) {
-    IndicatorRenderer.renderCard(grid, 'US Gas Prices ($/gal)', canvas => {
-      IndicatorRenderer.createGasChart(canvas, indicatorData);
-    });
+    if (hasCPI) {
+      IndicatorRenderer.renderCard(grid, 'US Consumer Price Index', canvas => {
+        IndicatorRenderer.createCPIChart(canvas, indicatorData['CPI']);
+      });
+    }
+
+    if (hasMETR) {
+      IndicatorRenderer.renderCard(grid, 'METR Agent Time Horizon (50% success)', canvas => {
+        IndicatorRenderer.createMETRChart(canvas, metrData);
+      });
+    }
+
+    section.appendChild(grid);
+    container.appendChild(section);
+  } catch (err) {
+    console.error('Indicators failed to load:', err);
   }
-
-  if (hasCPI) {
-    IndicatorRenderer.renderCard(grid, 'US Consumer Price Index', canvas => {
-      IndicatorRenderer.createCPIChart(canvas, indicatorData['CPI']);
-    });
-  }
-
-  if (hasMETR) {
-    IndicatorRenderer.renderCard(grid, 'METR Agent Time Horizon (50% success)', canvas => {
-      IndicatorRenderer.createMETRChart(canvas, metrData);
-    });
-  }
-
-  section.appendChild(grid);
-  container.appendChild(section);
 }

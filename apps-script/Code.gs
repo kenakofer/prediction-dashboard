@@ -825,6 +825,86 @@ function recordIndicators() {
   }
 }
 
+// ── METR Time Horizon data ────────────────────────────────────
+
+/**
+ * Fetch METR time horizon benchmark data from metr.org, extract the embedded
+ * JSON, and write to the Indicators sheet as series "METR:{ModelName}".
+ * Dedup-safe: skips rows already present.
+ */
+function backfillMETR() {
+  const sheet = ensureIndicatorsSheet();
+
+  const resp = UrlFetchApp.fetch('https://metr.org/time-horizons/', { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    Logger.log(`METR page: HTTP ${resp.getResponseCode()}`);
+    return;
+  }
+  const html = resp.getContentText();
+
+  // Try v1.1 first, fall back to v1.0
+  let benchmarkData = extractMETRJson(html, 'benchmarkDataV1_1') || extractMETRJson(html, 'benchmarkDataV1');
+  if (!benchmarkData) {
+    Logger.log('Could not extract METR benchmark data from page');
+    return;
+  }
+
+  // Build existing-row set for dedup
+  const existingData = sheet.getDataRange().getValues();
+  const existing = new Set();
+  for (let i = 1; i < existingData.length; i++) {
+    const d = sheetDateStr(existingData[i][0]);
+    const s = existingData[i][1]?.toString();
+    if (d && s) existing.add(`${d}|${s}`);
+  }
+
+  const results = benchmarkData.results || {};
+  const newRows = [];
+
+  for (const [key, model] of Object.entries(results)) {
+    const metrics = model.metrics || {};
+    const p50 = metrics.p50_horizon_length?.estimate;
+    const releaseDate = model.release_date;
+    if (p50 == null || !releaseDate) continue;
+
+    // Clean model name
+    let name = key.replace(/_inspect$/, '').replace(/_/g, ' ');
+    name = name.replace(/\b\w/g, c => c.toUpperCase());
+    const seriesName = `METR:${name}`;
+
+    const dateStr = releaseDate; // Already yyyy-MM-dd format
+    const rowKey = `${dateStr}|${seriesName}`;
+    if (!existing.has(rowKey)) {
+      newRows.push([dateStr, seriesName, p50]);
+      existing.add(rowKey);
+    }
+  }
+
+  if (newRows.length > 0) {
+    newRows.sort((a, b) => a[0].localeCompare(b[0]));
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
+    Logger.log(`Backfilled ${newRows.length} METR data points`);
+  } else {
+    Logger.log('METR data already up to date');
+  }
+}
+
+/** Extract a named JS object from HTML. Returns parsed object or null. */
+function extractMETRJson(html, varName) {
+  const re = new RegExp('const\\s+' + varName + '\\s*=\\s*');
+  const match = re.exec(html);
+  if (!match) return null;
+  const start = match.index + match[0].length;
+  let depth = 0, end = start;
+  for (let i = start; i < html.length; i++) {
+    if (html[i] === '{') depth++;
+    else if (html[i] === '}') depth--;
+    if (depth === 0) { end = i + 1; break; }
+  }
+  try { return JSON.parse(html.substring(start, end)); }
+  catch (e) { Logger.log(`Failed to parse ${varName}: ${e.message}`); return null; }
+}
+
 // ── Setup helper ──────────────────────────────────────────────
 
 /** Run this once to set up the time trigger */
@@ -894,7 +974,7 @@ function handleAction(body) {
 
   // Actions that don't require a sheet
   if (body.action === 'run') {
-    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, dedupPrices };
+    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, dedupPrices, backfillMETR };
     const fn = allowed[body.function];
     if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
     fn();
