@@ -192,16 +192,39 @@ function fetchMetaculus(questionId) {
 // ── Backfill from APIs (run manually once) ─────────────────────
 
 /**
+ * Read existing History rows and return a Set of "qid|date|platform|slug" keys
+ * for deduplication when backfilling.
+ */
+function getExistingHistoryKeys(historySheet) {
+  const keys = new Set();
+  const data = historySheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const qid = data[i][0]?.toString().trim();
+    const ts = data[i][1]?.toString().trim();
+    const platform = data[i][2]?.toString().trim();
+    const slug = data[i][3]?.toString().trim();
+    if (!qid || !ts) continue;
+    // Key by date (YYYY-MM-DD) to deduplicate at day level
+    const day = ts.length >= 10 ? ts.slice(0, 10) : ts;
+    keys.add(`${qid}|${day}|${platform}|${slug}`);
+  }
+  return keys;
+}
+
+/**
  * Optional: Backfill historical data from platform APIs.
- * Run this once manually to seed your History tab with past data.
- * Only Manifold and Polymarket reliably provide history via API.
+ * Safe to run multiple times — skips dates already in History.
+ * Note: Only Manifold and Polymarket provide public history APIs.
+ * Kalshi and Metaculus do not expose historical data publicly.
  */
 function backfillHistory() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const marketsSheet = ss.getSheetByName('Markets');
   const historySheet = ss.getSheetByName('History');
   const markets = getMarkets(marketsSheet);
+  const existingKeys = getExistingHistoryKeys(historySheet);
   let totalRows = 0;
+  let skippedRows = 0;
 
   for (const m of markets) {
     let rows = [];
@@ -212,16 +235,36 @@ function backfillHistory() {
       case 'polymarket':
         rows = backfillPolymarket(m.question_id, m.slug);
         break;
+      case 'kalshi':
+        Logger.log(`Kalshi: No public history API for ${m.slug} — data collected going forward only`);
+        break;
+      case 'metaculus':
+        Logger.log(`Metaculus: No public history API for question ${m.slug} — data collected going forward only`);
+        break;
     }
-    if (rows.length > 0) {
+
+    // Deduplicate against existing history
+    const newRows = [];
+    for (const row of rows) {
+      const day = row[1].slice(0, 10); // timestamp → YYYY-MM-DD
+      const key = `${row[0]}|${day}|${row[2]}|${row[3]}`;
+      if (existingKeys.has(key)) {
+        skippedRows++;
+      } else {
+        newRows.push(row);
+        existingKeys.add(key); // prevent intra-batch dupes too
+      }
+    }
+
+    if (newRows.length > 0) {
       historySheet
-        .getRange(historySheet.getLastRow() + 1, 1, rows.length, 5)
-        .setValues(rows);
-      totalRows += rows.length;
+        .getRange(historySheet.getLastRow() + 1, 1, newRows.length, 5)
+        .setValues(newRows);
+      totalRows += newRows.length;
     }
   }
 
-  Logger.log(`Backfilled ${totalRows} total rows`);
+  Logger.log(`Backfilled ${totalRows} new rows (${skippedRows} duplicates skipped)`);
 }
 
 function backfillManifold(questionId, slug) {
@@ -319,4 +362,90 @@ function createTrigger() {
     .create();
 
   Logger.log('Triggers created: 8 AM and 8 PM daily');
+}
+
+// ── Web App API ───────────────────────────────────────────────
+// Deploy as web app: Publish → Deploy as web app → Execute as: Me, Access: Anyone
+// Set WEBAPP_SECRET in Script Properties for auth.
+//
+// POST body JSON:
+//   { "secret": "...", "action": "append"|"read"|"delete_rows", "sheet": "Markets"|"Questions"|..., ... }
+//
+// Actions:
+//   append:      { rows: [[col1, col2, ...], ...] }                — append rows
+//   read:        {}                                                  — returns all rows
+//   delete_rows: { match: { column: "slug", value: "some-slug" } } — delete matching rows
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const secret = PropertiesService.getScriptProperties().getProperty('WEBAPP_SECRET');
+    if (!secret || body.secret !== secret) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    return handleAction(body);
+  } catch (err) {
+    return jsonResponse({ error: err.message }, 500);
+  }
+}
+
+function doGet(e) {
+  const secret = PropertiesService.getScriptProperties().getProperty('WEBAPP_SECRET');
+  if (!secret || e.parameter.secret !== secret) {
+    return jsonResponse({ error: 'Unauthorized' }, 401);
+  }
+  const sheetName = e.parameter.sheet;
+  if (!sheetName) return jsonResponse({ error: 'Missing sheet parameter' }, 400);
+  return handleAction({ action: 'read', sheet: sheetName });
+}
+
+function handleAction(body) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(body.sheet);
+  if (!sheet) return jsonResponse({ error: `Sheet "${body.sheet}" not found` }, 404);
+
+  switch (body.action) {
+    case 'read': {
+      const data = sheet.getDataRange().getValues();
+      const headers = data[0].map(h => h.toString());
+      const rows = data.slice(1).map(row => {
+        const obj = {};
+        headers.forEach((h, i) => obj[h] = row[i]?.toString() || '');
+        return obj;
+      });
+      return jsonResponse({ headers, rows, count: rows.length });
+    }
+
+    case 'append': {
+      if (!body.rows || !body.rows.length) return jsonResponse({ error: 'No rows to append' }, 400);
+      sheet.getRange(sheet.getLastRow() + 1, 1, body.rows.length, body.rows[0].length)
+        .setValues(body.rows);
+      return jsonResponse({ success: true, appended: body.rows.length });
+    }
+
+    case 'delete_rows': {
+      if (!body.match) return jsonResponse({ error: 'Missing match criteria' }, 400);
+      const data = sheet.getDataRange().getValues();
+      const headers = data[0].map(h => h.toString().trim().toLowerCase());
+      const colIdx = headers.indexOf(body.match.column.toLowerCase());
+      if (colIdx === -1) return jsonResponse({ error: `Column "${body.match.column}" not found` }, 404);
+      let deleted = 0;
+      // Delete from bottom up to avoid shifting indices
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (data[i][colIdx]?.toString().trim() === body.match.value) {
+          sheet.deleteRow(i + 1);
+          deleted++;
+        }
+      }
+      return jsonResponse({ success: true, deleted });
+    }
+
+    default:
+      return jsonResponse({ error: `Unknown action: ${body.action}` }, 400);
+  }
+}
+
+function jsonResponse(obj, status) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
