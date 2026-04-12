@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prediction Watch</title>
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Chart.js + plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Prediction Watch</h1>
+    <p class="subtitle">Hand-selected prediction market questions across platforms</p>
+    <p class="last-updated" id="last-updated"></p>
+  </header>
+
+  <main id="dashboard">
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Loading market data…</p>
+    </div>
+    <div id="error-banner" class="error-banner hidden"></div>
+    <div id="categories-container"></div>
+  </main>
+
+  <footer>
+    <p>Data sourced from
+      <a href="https://manifold.markets" target="_blank">Manifold</a>,
+      <a href="https://polymarket.com" target="_blank">Polymarket</a>,
+      <a href="https://kalshi.com" target="_blank">Kalshi</a>, and
+      <a href="https://metaculus.com" target="_blank">Metaculus</a>.
+    </p>
+  </footer>
+
+  <script src="js/config.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
