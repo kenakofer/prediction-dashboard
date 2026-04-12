@@ -638,6 +638,16 @@ function doGet(e) {
 
 function handleAction(body) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Actions that don't require a sheet
+  if (body.action === 'run') {
+    const allowed = { recordAllProbabilities, backfillHistory };
+    const fn = allowed[body.function];
+    if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
+    fn();
+    return jsonResponse({ success: true, ran: body.function });
+  }
+
   const sheet = ss.getSheetByName(body.sheet);
   if (!sheet) return jsonResponse({ error: `Sheet "${body.sheet}" not found` }, 404);
 
