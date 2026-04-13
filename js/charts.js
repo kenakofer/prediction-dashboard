@@ -82,15 +82,32 @@ const ChartRenderer = (() => {
     };
   }
 
+  /** Sanitize a string for safe use as text content in HTML */
+  function sanitizeText(str) {
+    const el = document.createElement('span');
+    el.textContent = str;
+    return el.innerHTML;
+  }
+
+  /** Validate that a URL is safe (http/https only) */
+  function sanitizeUrl(url) {
+    if (!url) return null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
+    } catch (_) {}
+    return null;
+  }
+
   /** Generate a link URL for a market/source */
   function sourceUrl(source) {
-    if (source.url) return source.url;
+    if (source.url) return sanitizeUrl(source.url);
     const slug = source.slug;
     switch (source.platform) {
       case 'manifold':   return `https://manifold.markets/browse?q=${encodeURIComponent(slug)}`;
-      case 'polymarket': return `https://polymarket.com/event/${slug}`;
+      case 'polymarket': return `https://polymarket.com/event/${encodeURIComponent(slug)}`;
       case 'kalshi':     return `https://kalshi.com/browse?query=${encodeURIComponent(slug)}`;
-      case 'metaculus':  return `https://www.metaculus.com/questions/${slug}/`;
+      case 'metaculus':  return `https://www.metaculus.com/questions/${encodeURIComponent(slug)}/`;
       default:           return null;
     }
   }
@@ -424,18 +441,37 @@ const ChartRenderer = (() => {
       const latestValues = DataService.getLatestValues(graphData);
       const probDiv = document.createElement('div');
       probDiv.className = 'current-prob';
-      const parts = [];
+      let hasData = false;
       for (const s of (sources || [])) {
         const latest = latestValues[s.slug];
         if (latest) {
+          hasData = true;
           const url = sourceUrl(s);
-          const tag = url
-            ? `<a class="platform-tag ${s.platform}" href="${url}" target="_blank" rel="noopener">${s.label}</a>`
-            : `<span class="platform-tag ${s.platform}">${s.label}</span>`;
-          parts.push(`${tag} <span>${latest.value.toFixed(1)}%</span>`);
+          const platformClass = /^[a-z]+$/.test(s.platform) ? s.platform : '';
+          let tag;
+          if (url) {
+            tag = document.createElement('a');
+            tag.href = url;
+            tag.target = '_blank';
+            tag.rel = 'noopener';
+          } else {
+            tag = document.createElement('span');
+          }
+          tag.className = `platform-tag ${platformClass}`;
+          tag.textContent = s.label;
+          probDiv.appendChild(tag);
+
+          const valueSpan = document.createElement('span');
+          valueSpan.textContent = ` ${latest.value.toFixed(1)}%`;
+          probDiv.appendChild(valueSpan);
+          probDiv.appendChild(document.createTextNode('  '));
         }
       }
-      probDiv.innerHTML = parts.length ? parts.join('  ') : '<em>No data yet</em>';
+      if (!hasData) {
+        const em = document.createElement('em');
+        em.textContent = 'No data yet';
+        probDiv.appendChild(em);
+      }
       card.appendChild(probDiv);
     }
 

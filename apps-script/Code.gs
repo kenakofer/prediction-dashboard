@@ -948,13 +948,7 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  const secret = PropertiesService.getScriptProperties().getProperty('WEBAPP_SECRET');
-  if (!secret || e.parameter.secret !== secret) {
-    return jsonResponse({ error: 'Unauthorized' }, 401);
-  }
-  const sheetName = e.parameter.sheet;
-  if (!sheetName) return jsonResponse({ error: 'Missing sheet parameter' }, 400);
-  return handleAction({ action: 'read', sheet: sheetName });
+  return jsonResponse({ error: 'GET not supported. Use POST with secret in the request body.' }, 405);
 }
 
 function handleAction(body) {
@@ -1015,6 +1009,10 @@ function handleAction(body) {
 
     case 'write_cells': {
       if (!body.range) return jsonResponse({ error: 'Missing range' }, 400);
+      const allowedWriteSheets = ['Data'];
+      if (!allowedWriteSheets.includes(body.sheet)) {
+        return jsonResponse({ error: `write_cells not allowed on sheet "${body.sheet}"` }, 403);
+      }
       const r = sheet.getRange(body.range);
       if (Array.isArray(body.values) && Array.isArray(body.values[0])) {
         r.setValues(body.values);

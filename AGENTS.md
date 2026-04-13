@@ -66,10 +66,13 @@ curl -s "$redirect"
 |--------|----------------|-------------|
 | `read` | `sheet` | Returns `{headers, rows, count}` |
 | `append` | `sheet`, `rows` (2D array) | Appends rows |
-| `write_cells` | `sheet`, `range`, `values` | Write to a named range |
+| `write_cells` | `sheet`, `range`, `values` | Write to a range (Data sheet only) |
 | `delete_rows` | `sheet`, `match: {column, value}` | Delete matching rows |
 | `run` | `function` | Run an allowlisted Apps Script function |
 | `get_sheets` | — | List all tabs with name and GID |
+
+> **Note:** `doGet` is disabled — all API calls must use POST with the secret in
+> the JSON body. Never pass secrets as URL query parameters.
 
 ### Allowlisted `run` functions
 `recordAllProbabilities`, `backfillHistory`, `backfillPrices`, `recordPrices`,
@@ -194,3 +197,34 @@ Use the `pub?output=csv&gid=<GID>` URL format — these have `Access-Control-All
 Uses `/v0/bets` endpoint, samples one point per day (last bet of the day).
 Only Manifold and Polymarket have public history APIs; Kalshi and Metaculus
 data is collected going forward only.
+
+---
+
+## Security Conventions
+
+### Frontend — no innerHTML with external data
+All CSV-sourced values (labels, URLs, platforms) must be rendered using
+`textContent` or `createElement`, never via `innerHTML` or template-string HTML.
+Helper functions in `js/charts.js`:
+- `sanitizeText(str)` — escapes HTML entities
+- `sanitizeUrl(url)` — validates `http:`/`https:` protocol, returns `null` otherwise
+
+### CDN scripts — Subresource Integrity (SRI)
+All `<script>` tags loading from CDNs must include `integrity` and `crossorigin`
+attributes. When upgrading a library version, regenerate the hash:
+```bash
+curl -s <CDN_URL> | openssl dgst -sha384 -binary | openssl base64 -A
+```
+
+### Content Security Policy
+`index.html` includes a CSP `<meta>` tag restricting script sources to `'self'`
+and `https://cdn.jsdelivr.net`, and connect sources to `https://docs.google.com`.
+Update the CSP if you add new external resources.
+
+### Web App API — secrets in POST body only
+The `doGet` handler rejects all requests. Secrets must be sent in the POST JSON
+body, never as URL query parameters (they leak into logs and Referer headers).
+
+### write_cells restriction
+`write_cells` is restricted to the `Data` sheet only. Update the `allowedWriteSheets`
+array in `Code.gs` if you need to write to additional sheets.

@@ -38,11 +38,14 @@
       legend.className = 'platform-legend';
       for (const [key, label] of Object.entries(CONFIG.PLATFORM_LABELS)) {
         if (!usedPlatforms.has(key)) continue;
-        legend.innerHTML += `
-          <div class="legend-item">
-            <span class="legend-dot" style="background:${CONFIG.PLATFORM_COLORS[key]}"></span>
-            ${label}
-          </div>`;
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        const dot = document.createElement('span');
+        dot.className = 'legend-dot';
+        dot.style.background = CONFIG.PLATFORM_COLORS[key];
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(` ${label}`));
+        legend.appendChild(item);
       }
       containerEl.appendChild(legend);
     }

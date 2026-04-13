@@ -7,3 +7,4 @@ Thumbs.db
 # clasp
 .clasp.json
 nvim-verbose.log
+.fuse_hidden*
