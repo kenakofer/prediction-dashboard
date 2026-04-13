@@ -443,13 +443,39 @@ const ChartRenderer = (() => {
     let toggleDiv = null;
     let windowMonths = null;
     if (graph.param) {
-      windowMonths = parseWindows(graph.param);
+      // Find data span in days to prune redundant windows
+      let dataSpanDays = 0;
+      for (const points of Object.values(graphData || {})) {
+        if (points.length < 2) continue;
+        const span = (points[points.length - 1].date - points[0].date) / 86400000;
+        if (span > dataSpanDays) dataSpanDays = span;
+      }
+
+      // Keep all windows shorter than data span, plus at most one longer
+      const allWindows = parseWindows(graph.param);
+      if (dataSpanDays > 0) {
+        const filtered = [];
+        let addedLong = false;
+        for (const m of allWindows) {
+          if (m * 30.44 <= dataSpanDays) {
+            filtered.push(m);
+          } else if (!addedLong) {
+            filtered.push(m);
+            addedLong = true;
+          }
+        }
+        windowMonths = filtered.length > 0 ? filtered : allWindows;
+      } else {
+        windowMonths = allWindows;
+      }
+
       toggleDiv = document.createElement('div');
       toggleDiv.className = 'window-toggle';
       windowMonths.forEach((m, i) => {
         const btn = document.createElement('button');
         btn.textContent = monthLabel(m);
-        btn.className = 'window-btn' + (i === 0 ? ' active' : '');
+        const isDefault = i === windowMonths.length - 1;
+        btn.className = 'window-btn' + (isDefault ? ' active' : '');
         btn.dataset.months = m;
         toggleDiv.appendChild(btn);
       });
@@ -465,8 +491,8 @@ const ChartRenderer = (() => {
 
     container.appendChild(card);
 
-    // Initial days from first window
-    let currentDays = windowMonths ? Math.round(windowMonths[0] * 30.44) : null;
+    // Initial days from last (longest) window
+    let currentDays = windowMonths ? Math.round(windowMonths[windowMonths.length - 1] * 30.44) : null;
     let chart = null;
 
     function buildChart(days) {

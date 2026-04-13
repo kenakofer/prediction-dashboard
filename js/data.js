@@ -17,7 +17,7 @@ const DataService = (() => {
 
   // ── Questions (Graphs) ─────────────────────────
 
-  /** Parse Questions tab: question_id, title, category, sort_order, chart_type, unit, param */
+  /** Parse Graphs tab: question_id, title, category, sort_order, chart_type, unit, param */
   function parseQuestions(rows) {
     return rows.map((r) => ({
       id: r.question_id?.trim(),
@@ -32,7 +32,7 @@ const DataService = (() => {
 
   // ── Markets (Sources) ──────────────────────────
 
-  /** Parse Markets tab: question_id, platform, slug, label, url, param, color */
+  /** Parse Sources tab: question_id, platform, slug, label, url, param, color */
   function parseMarkets(rows) {
     const map = {};
     for (const r of rows) {
@@ -137,8 +137,8 @@ const DataService = (() => {
     if (!dataUrl) throw new Error('DATA sheet GID not configured — run migration first');
 
     const [questionsRaw, marketsRaw, dataRaw, annotationsRaw] = await Promise.all([
-      fetchCsv(CONFIG.csvUrl('QUESTIONS')),
-      fetchCsv(CONFIG.csvUrl('MARKETS')),
+      fetchCsv(CONFIG.csvUrl('GRAPHS')),
+      fetchCsv(CONFIG.csvUrl('SOURCES')),
       fetchCsv(dataUrl),
       fetchCsv(CONFIG.csvUrl('ANNOTATIONS')),
     ]);

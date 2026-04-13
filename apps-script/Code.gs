@@ -56,9 +56,9 @@ function appendDataRows(sheet, rows, existing) {
 
 // ── Read Markets (Sources) from sheet ─────────────────────────
 
-/** Read Markets tab dynamically. Returns array of source objects. */
+/** Read Sources tab dynamically. Returns array of source objects. */
 function getSources(sheet) {
-  if (!sheet) sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Markets');
+  if (!sheet) sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sources');
   const data = sheet.getDataRange().getValues();
   const headers = data[0].map(h => h.toString().trim().toLowerCase());
   const sources = [];
@@ -812,7 +812,7 @@ function dedupData() {
 
 /**
  * One-time migration: copies History, Prices, Indicators into the unified Data sheet.
- * Requires Markets to have the new source rows (yahoo, bls, metr) already added.
+ * Requires Sources to have the new source rows (yahoo, bls, metr) already added.
  * Safe to run multiple times (dedup).
  */
 function migrateToUnifiedData() {

@@ -7,13 +7,13 @@ const CONFIG = {
 
   // Tab GIDs — click each tab and read #gid=XXXXXXXX from the URL
   SHEET_GIDS: {
-    QUESTIONS:   0,
-    MARKETS:     121572886,
+    GRAPHS:      0,
+    SOURCES:     121572886,
     DATA:        836790020,
     ANNOTATIONS: 1666890327,
   },
 
-  // Default platform colors (used when Markets row has no explicit color)
+  // Default platform colors (used when Sources row has no explicit color)
   PLATFORM_COLORS: {
     manifold:   '#4f8ff7',
     polymarket: '#a855f7',
