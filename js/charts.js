@@ -40,8 +40,8 @@ const ChartRenderer = (() => {
     };
   }
 
-  function timeXAxis(fmt) {
-    return {
+  function timeXAxis(fmt, min) {
+    const config = {
       type: 'time',
       time: {
         tooltipFormat: fmt || 'MMM d, yyyy',
@@ -51,6 +51,8 @@ const ChartRenderer = (() => {
       grid: { color: DARK.grid },
       ticks: { color: DARK.tick, maxTicksLimit: 8 },
     };
+    if (min) config.min = min;
+    return config;
   }
 
   function buildAnnotations(annotations) {
@@ -151,7 +153,7 @@ const ChartRenderer = (() => {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          x: timeXAxis(),
+          x: timeXAxis(null, cutoff),
           y: {
             min: 0, max: 100,
             ticks: { color: DARK.tick, callback: v => v + '%', stepSize: 25 },
@@ -220,14 +222,18 @@ const ChartRenderer = (() => {
   }
 
   function renderPercentChange(canvas, graph, sources, graphData, annotations, days) {
+    const effectiveDays = days || Math.round(parseWindows(graph.param)[0] * 30.44);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - effectiveDays);
+    
     return new Chart(canvas, {
       type: 'line',
-      data: { datasets: buildPctDatasets(sources, graphData, days || Math.round(parseWindows(graph.param)[0] * 30.44)) },
+      data: { datasets: buildPctDatasets(sources, graphData, effectiveDays) },
       options: {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          x: timeXAxis(),
+          x: timeXAxis(null, cutoff),
           y: {
             ticks: { color: DARK.tick, callback: v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%` },
             grid: { color: DARK.grid },
@@ -276,7 +282,7 @@ const ChartRenderer = (() => {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          x: timeXAxis('MMM yyyy'),
+          x: timeXAxis('MMM yyyy', cutoff),
           y: {
             ticks: { color: DARK.tick, callback: v => '$' + v.toFixed(2) },
             grid: { color: DARK.grid },
@@ -322,7 +328,7 @@ const ChartRenderer = (() => {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          x: timeXAxis('MMM yyyy'),
+          x: timeXAxis('MMM yyyy', cutoff),
           y: {
             ticks: { color: DARK.tick },
             grid: { color: DARK.grid },
@@ -390,7 +396,7 @@ const ChartRenderer = (() => {
         responsive: true, maintainAspectRatio: true,
         interaction: { mode: 'nearest', intersect: true },
         scales: {
-          x: timeXAxis(),
+          x: timeXAxis(null, cutoff),
           y: {
             type: 'logarithmic',
             ticks: {
