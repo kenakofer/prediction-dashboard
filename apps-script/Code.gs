@@ -97,15 +97,20 @@ function getSourcesByPlatform(platforms) {
 
 // ── Recording functions (called by triggers) ──────────────────
 
-/** Record current probabilities for all prediction market sources. */
-function recordAllProbabilities() {
+/**
+ * Record all data types in a single trigger call.
+ * Runs: prediction market probabilities, yahoo prices, BLS indicators.
+ */
+function recordAll() {
   const sheet = ensureDataSheet();
-  const sources = getSourcesByPlatform(['manifold', 'polymarket', 'kalshi', 'metaculus']);
   const existing = getExistingDataKeys(sheet);
-  const timestamp = new Date().toISOString();
-  const rows = [];
+  let totalAdded = 0;
 
-  for (const s of sources) {
+  // 1. Prediction market probabilities
+  const predSources = getSourcesByPlatform(['manifold', 'polymarket', 'kalshi', 'metaculus']);
+  const timestamp = new Date().toISOString();
+  const predRows = [];
+  for (const s of predSources) {
     let prob = null;
     switch (s.platform) {
       case 'manifold':   prob = fetchManifold(s.slug); break;
@@ -113,55 +118,47 @@ function recordAllProbabilities() {
       case 'kalshi':     prob = fetchKalshi(s.slug); break;
       case 'metaculus':  prob = fetchMetaculus(s.slug, s.param); break;
     }
-    if (prob !== null) {
-      rows.push([s.graph_id, timestamp, s.slug, prob]);
-    }
+    if (prob !== null) predRows.push([s.graph_id, timestamp, s.slug, prob]);
   }
+  const predAdded = appendDataRows(sheet, predRows, existing);
+  Logger.log(`Probabilities: ${predAdded} recorded`);
+  totalAdded += predAdded;
 
-  const added = appendDataRows(sheet, rows, existing);
-  Logger.log(`Recorded ${added} probability data points`);
-}
-
-/** Record today's closing prices for all yahoo sources. */
-function recordPrices() {
-  const sheet = ensureDataSheet();
-  const sources = getSourcesByPlatform('yahoo');
-  if (sources.length === 0) { Logger.log('No yahoo sources configured'); return; }
-  const existing = getExistingDataKeys(sheet);
-  const rows = [];
-
-  for (const s of sources) {
+  // 2. Yahoo Finance prices
+  const yahooSources = getSourcesByPlatform('yahoo');
+  const priceRows = [];
+  for (const s of yahooSources) {
     const points = fetchYahooHistory(s.slug, 5);
     if (!points || points.length === 0) { Logger.log(`${s.slug}: no data`); continue; }
     const [dateStr, close] = points[points.length - 1];
-    rows.push([s.graph_id, dateStr, s.slug, close]);
-    Logger.log(`${s.slug}: ${dateStr} = ${close}`);
+    priceRows.push([s.graph_id, dateStr, s.slug, close]);
+  }
+  const priceAdded = appendDataRows(sheet, priceRows, existing);
+  Logger.log(`Prices: ${priceAdded} recorded`);
+  totalAdded += priceAdded;
+
+  // 3. BLS indicators (fetch current + previous year to catch recent releases)
+  const blsSources = getSourcesByPlatform('bls');
+  if (blsSources.length > 0) {
+    const slugToGraph = {};
+    for (const s of blsSources) slugToGraph[s.slug] = s.graph_id;
+    const currentYear = new Date().getFullYear();
+    const blsRows = fetchBLS(blsSources.map(s => s.slug), currentYear - 1, currentYear);
+    const indRows = blsRows.map(([dateStr, seriesId, value]) =>
+      [slugToGraph[seriesId] || seriesId, dateStr, seriesId, value]
+    );
+    const indAdded = appendDataRows(sheet, indRows, existing);
+    Logger.log(`Indicators: ${indAdded} recorded`);
+    totalAdded += indAdded;
   }
 
-  const added = appendDataRows(sheet, rows, existing);
-  Logger.log(`Recorded ${added} prices`);
+  Logger.log(`recordAll complete: ${totalAdded} total new rows`);
 }
 
-/** Record latest BLS indicator values. */
-function recordIndicators() {
-  const sheet = ensureDataSheet();
-  const sources = getSourcesByPlatform('bls');
-  if (sources.length === 0) { Logger.log('No BLS sources configured'); return; }
-  const existing = getExistingDataKeys(sheet);
-
-  // Build slug→graph_id mapping
-  const slugToGraph = {};
-  for (const s of sources) slugToGraph[s.slug] = s.graph_id;
-
-  const currentYear = new Date().getFullYear();
-  const blsRows = fetchBLS(sources.map(s => s.slug), currentYear, currentYear);
-  const rows = blsRows.map(([dateStr, seriesId, value]) =>
-    [slugToGraph[seriesId] || seriesId, dateStr, seriesId, value]
-  );
-
-  const added = appendDataRows(sheet, rows, existing);
-  Logger.log(`Recorded ${added} indicator values`);
-}
+// Keep individual functions as aliases for manual use / backward compat
+function recordAllProbabilities() { recordAll(); }
+function recordPrices() { recordAll(); }
+function recordIndicators() { recordAll(); }
 
 // ── Platform API fetchers ─────────────────────────────────────
 // Each returns a probability as a number 0-100, or null on error.
@@ -905,21 +902,13 @@ function createTrigger() {
     ScriptApp.deleteTrigger(trigger);
   }
 
-  // Twice daily: 8 AM and 8 PM — prediction markets
-  ScriptApp.newTrigger('recordAllProbabilities')
+  // Twice daily: 8 AM and 8 PM — records all data types (probabilities, prices, indicators)
+  ScriptApp.newTrigger('recordAll')
     .timeBased().atHour(8).everyDays(1).create();
-  ScriptApp.newTrigger('recordAllProbabilities')
+  ScriptApp.newTrigger('recordAll')
     .timeBased().atHour(20).everyDays(1).create();
 
-  // Once daily: record stock prices at 10 PM (after US market close)
-  ScriptApp.newTrigger('recordPrices')
-    .timeBased().atHour(22).everyDays(1).create();
-
-  // Monthly indicators (BLS data published monthly); check daily, dedup handles it
-  ScriptApp.newTrigger('recordIndicators')
-    .timeBased().atHour(9).everyDays(1).create();
-
-  Logger.log('Triggers created: 8 AM/8 PM (probabilities), 10 PM (prices), 9 AM (indicators) daily');
+  Logger.log('Triggers created: recordAll at 8 AM and 8 PM daily');
 }
 
 // ── Web App API ───────────────────────────────────────────────
@@ -956,7 +945,7 @@ function handleAction(body) {
 
   // Actions that don't require a sheet
   if (body.action === 'run') {
-    const allowed = { recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, backfillMETR, dedupData, migrateToUnifiedData, createTrigger };
+    const allowed = { recordAll, recordAllProbabilities, backfillHistory, backfillPrices, recordPrices, backfillIndicators, recordIndicators, backfillMETR, dedupData, migrateToUnifiedData, createTrigger };
     const fn = allowed[body.function];
     if (!fn) return jsonResponse({ error: `Unknown function: ${body.function}` }, 400);
     fn();

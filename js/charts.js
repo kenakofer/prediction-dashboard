@@ -47,6 +47,7 @@ const ChartRenderer = (() => {
         tooltipFormat: fmt || 'MMM d, yyyy',
         displayFormats: { day: 'MMM d', week: 'MMM d', month: 'MMM yyyy' },
       },
+      max: new Date(),
       grid: { color: DARK.grid },
       ticks: { color: DARK.tick, maxTicksLimit: 8 },
     };
@@ -478,6 +479,7 @@ const ChartRenderer = (() => {
     // Time window toggle — shown for any chart type with param set
     let toggleDiv = null;
     let windowMonths = null;
+    let defaultMonth = null;
     if (graph.param) {
       // Find data span in days to prune redundant windows
       let dataSpanDays = 0;
@@ -487,12 +489,16 @@ const ChartRenderer = (() => {
         if (span > dataSpanDays) dataSpanDays = span;
       }
 
-      // Keep all windows shorter than data span, plus at most one longer
+      // Parse windows: first value is the default; display in ascending order
       const allWindows = parseWindows(graph.param);
+      defaultMonth = allWindows[0];
+
+      // Keep all windows shorter than data span, plus at most one longer
+      let pruned = allWindows;
       if (dataSpanDays > 0) {
         const filtered = [];
         let addedLong = false;
-        for (const m of allWindows) {
+        for (const m of [...allWindows].sort((a, b) => a - b)) {
           if (m * 30.44 <= dataSpanDays) {
             filtered.push(m);
           } else if (!addedLong) {
@@ -500,18 +506,19 @@ const ChartRenderer = (() => {
             addedLong = true;
           }
         }
-        windowMonths = filtered.length > 0 ? filtered : allWindows;
-      } else {
-        windowMonths = allWindows;
+        pruned = filtered.length > 0 ? filtered : allWindows;
       }
+      // Sort ascending for display
+      windowMonths = [...new Set(pruned)].sort((a, b) => a - b);
+      // Ensure default is in the list
+      if (!windowMonths.includes(defaultMonth)) defaultMonth = windowMonths[windowMonths.length - 1];
 
       toggleDiv = document.createElement('div');
       toggleDiv.className = 'window-toggle';
-      windowMonths.forEach((m, i) => {
+      windowMonths.forEach((m) => {
         const btn = document.createElement('button');
         btn.textContent = monthLabel(m);
-        const isDefault = i === windowMonths.length - 1;
-        btn.className = 'window-btn' + (isDefault ? ' active' : '');
+        btn.className = 'window-btn' + (m === defaultMonth ? ' active' : '');
         btn.dataset.months = m;
         toggleDiv.appendChild(btn);
       });
@@ -527,8 +534,8 @@ const ChartRenderer = (() => {
 
     container.appendChild(card);
 
-    // Initial days from last (longest) window
-    let currentDays = windowMonths ? Math.round(windowMonths[windowMonths.length - 1] * 30.44) : null;
+    // Initial days from the default window (first listed in param)
+    let currentDays = defaultMonth ? Math.round(defaultMonth * 30.44) : null;
     let chart = null;
 
     function buildChart(days) {

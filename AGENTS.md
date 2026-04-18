@@ -75,7 +75,7 @@ curl -s "$redirect"
 > the JSON body. Never pass secrets as URL query parameters.
 
 ### Allowlisted `run` functions
-`recordAllProbabilities`, `backfillHistory`, `backfillPrices`, `recordPrices`,
+`recordAll`, `recordAllProbabilities`, `backfillHistory`, `backfillPrices`, `recordPrices`,
 `backfillIndicators`, `recordIndicators`, `backfillMETR`, `dedupData`,
 `migrateToUnifiedData`, `createTrigger`
 
@@ -93,8 +93,9 @@ curl -s "$redirect"
 
    `param` = comma-separated month values for time window toggle buttons
    (e.g. `1,6,12,24,60` → 1M, 6M, 1Y, 2Y, 5Y). Leave empty for no toggles.
-   The **last** value is selected by default; buttons that exceed the actual data
-   span are pruned (keeping at most one "show all" button).
+   The **first** value is selected by default; buttons are always displayed in
+   ascending order. Buttons that exceed the actual data span are pruned
+   (keeping at most one "show all" button).
 
 2. **Sources tab** — add one row per data series:
 
