@@ -219,7 +219,7 @@ const ChartRenderer = (() => {
       });
   }
 
-  function renderPercentChange(canvas, graph, sources, graphData, days) {
+  function renderPercentChange(canvas, graph, sources, graphData, annotations, days) {
     return new Chart(canvas, {
       type: 'line',
       data: { datasets: buildPctDatasets(sources, graphData, days || Math.round(parseWindows(graph.param)[0] * 30.44)) },
@@ -241,6 +241,7 @@ const ChartRenderer = (() => {
               label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(1)}%`,
             },
           },
+          annotation: { annotations: buildAnnotations(annotations) },
         },
       },
     });
@@ -248,7 +249,7 @@ const ChartRenderer = (() => {
 
   // ── Chart type: dollar ─────────────────────────
 
-  function renderDollar(canvas, graph, sources, graphData, days) {
+  function renderDollar(canvas, graph, sources, graphData, annotations, days) {
     const cutoff = days ? cutoffDate(days) : null;
     const datasets = (sources || [])
       .filter(s => graphData[s.slug]?.length > 0)
@@ -287,6 +288,7 @@ const ChartRenderer = (() => {
             ...baseTooltip(),
             callbacks: { label: ctx => `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(3)}` },
           },
+          annotation: { annotations: buildAnnotations(annotations) },
         },
       },
     });
@@ -294,7 +296,7 @@ const ChartRenderer = (() => {
 
   // ── Chart type: index ──────────────────────────
 
-  function renderIndex(canvas, graph, sources, graphData, days) {
+  function renderIndex(canvas, graph, sources, graphData, annotations, days) {
     const cutoff = days ? cutoffDate(days) : null;
     const datasets = (sources || [])
       .filter(s => graphData[s.slug]?.length > 0)
@@ -332,6 +334,7 @@ const ChartRenderer = (() => {
             ...baseTooltip(),
             callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}` },
           },
+          annotation: { annotations: buildAnnotations(annotations) },
         },
       },
     });
@@ -339,7 +342,7 @@ const ChartRenderer = (() => {
 
   // ── Chart type: log_scatter ────────────────────
 
-  function renderLogScatter(canvas, graph, sources, graphData, days) {
+  function renderLogScatter(canvas, graph, sources, graphData, annotations, days) {
     const cutoff = days ? cutoffDate(days) : null;
     // Collect all data points across all series for this graph
     const allPoints = [];
@@ -420,6 +423,7 @@ const ChartRenderer = (() => {
               },
             },
           },
+          annotation: { annotations: buildAnnotations(annotations) },
         },
       },
     });
@@ -544,13 +548,13 @@ const ChartRenderer = (() => {
         case 'probability':
           return renderProbability(canvas, graph, sources, graphData || {}, annotations, days);
         case 'percent_change':
-          return renderPercentChange(canvas, graph, sources, graphData || {}, days);
+          return renderPercentChange(canvas, graph, sources, graphData || {}, annotations, days);
         case 'dollar':
-          return renderDollar(canvas, graph, sources, graphData || {}, days);
+          return renderDollar(canvas, graph, sources, graphData || {}, annotations, days);
         case 'index':
-          return renderIndex(canvas, graph, sources, graphData || {}, days);
+          return renderIndex(canvas, graph, sources, graphData || {}, annotations, days);
         case 'log_scatter':
-          return renderLogScatter(canvas, graph, sources, graphData || {}, days);
+          return renderLogScatter(canvas, graph, sources, graphData || {}, annotations, days);
         default:
           console.warn(`Unknown chart_type "${graph.chartType}" for ${graph.id}`);
           return null;
